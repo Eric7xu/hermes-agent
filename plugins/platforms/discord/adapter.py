@@ -1216,7 +1216,7 @@ from plugins.platforms.discord.adapter_authorization import DiscordAuthorization
 from plugins.platforms.discord.adapter_slash_auth import DiscordSlashAuthMixin
 from plugins.platforms.discord.adapter_thread_titles import DiscordThreadTitlesMixin, SemanticThreadRenames
 from plugins.platforms.discord.adapter_voice_info import DiscordVoiceInfoMixin
-
+from plugins.platforms.discord.adapter_typing import TypingPaused, typing_http_trace
 
 class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThreadTitlesMixin, DiscordVoiceInfoMixin,
                      DiscordSlashAuthMixin, BasePlatformAdapter):
@@ -1491,7 +1491,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                     self._ready_event.clear()
             self._client = commands.Bot(
                 command_prefix="!",  # Not really used, we handle raw messages
-                intents=intents,
+                intents=intents, http_trace=typing_http_trace(self),
                 allowed_mentions=_build_allowed_mentions(getattr(self.config, "extra", None)),
                 **proxy_kwargs_for_bot(proxy_url),
             )
@@ -4342,7 +4342,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                             "POST", "/channels/{channel_id}/typing", channel_id=chat_id,
                         )
                         await self._client.http.request(route)
-                    except asyncio.CancelledError:
+                    except (asyncio.CancelledError, TypingPaused):
                         return
                     except Exception as e:
                         retry_after = self._extract_discord_retry_after(e)
