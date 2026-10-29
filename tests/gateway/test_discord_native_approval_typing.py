@@ -29,7 +29,7 @@ def turn(adapter, key, controls, published, release, awakened, current, *, faile
         session_key=key, session_id=key, _status_adapter=adapter, _status_chat_id="77",
         source=SimpleNamespace(user_id="worker", user_name="Worker", is_bot=False),
         title_user_message=None, persist_user_display_kind=None, persist_user_display_metadata=None,
-        moa_config=None, inbound_message_id=None, mute_notification_reply=False,
+        moa_config=None, inbound_message_id=None, mute_notification_reply=False, reply_expected=True,
         _run_still_current=lambda: current[0],
     )
     runner._native_image_run_message = lambda: "request"

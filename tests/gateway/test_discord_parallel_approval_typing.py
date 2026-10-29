@@ -67,7 +67,7 @@ async def test_real_parallel_file_approvals_keep_typing_paused(tmp_path, monkeyp
         stream_consumer_holder=[None], _run_still_current=lambda: True,
         message="update project instructions", source=source, session_id=key,
         title_user_message=None, persist_user_display_kind=None, persist_user_display_metadata=None,
-        moa_config=None, inbound_message_id=None, mute_notification_reply=False,
+        moa_config=None, inbound_message_id=None, mute_notification_reply=False, reply_expected=True,
         native_images=[],
     )
     agent = file_agent()
@@ -127,8 +127,14 @@ async def test_real_parallel_file_approvals_keep_typing_paused(tmp_path, monkeyp
             "<write to AGENTS.md>", "<write to CLAUDE.md>"}
         assert all(not worker.done() for worker in workers)
         assert "77" in adapter._typing_paused
+        if control == "button":
+            # A card selects its own request, not the oldest wait in the chat.
+            first, second = second, first
         await decide(first, first=True)
-        assert sum(len(approval.list_gateway_approvals(session)) for session in runners) == 1
+        remaining = [entry for session in runners for entry in approval.list_gateway_approvals(session)]
+        assert len(remaining) == 1
+        if control == "button":
+            assert remaining[0]["request_id"] == second.request_id
         assert "77" in adapter._typing_paused, "first decision resumed a chat with another real tool awaiting approval"
         await adapter.send_typing("77")
         await asyncio.sleep(0)
