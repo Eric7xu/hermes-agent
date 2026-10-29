@@ -12,8 +12,13 @@ class ProcessEnvLogMixin:
         from tools.environments.capture import OutputCaptureError, require_complete_output
         session.capture_failed("remote launch PID read")
         # The launch may have succeeded. Only reread its durable receipt, never launch again.
-        recovered = env.execute(f"cat {shlex.quote(pid_path)} 2>/dev/null", timeout=5)
-        require_complete_output(recovered)
+        try:
+            recovered = env.execute(f"cat {shlex.quote(pid_path)} 2>/dev/null", timeout=5)
+            require_complete_output(recovered)
+        except Exception as exc:
+            raise OutputCaptureError(
+                "Background command may already have started; its PID could not be recovered. "
+                "Inspect its effects before considering a retry.") from exc
         if not recovered.get("output", "").strip().isdigit():
             raise OutputCaptureError(
                 "Background command may already have started; its PID could not be recovered. "

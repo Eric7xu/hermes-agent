@@ -2132,7 +2132,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             # Capture output, mark consumed, THEN expose ``exited`` to watcher tasks —
             # closes the delayed-notification race without losing the transcript.
             with session._lock:
-                output = _completion_output(session)
+                output = {**_completion_output(session), **session.capture_fields()}
                 if consume_output:
                     self._completion_consumed.add(session_id)
                 session.exited = True

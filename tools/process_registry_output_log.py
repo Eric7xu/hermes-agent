@@ -147,6 +147,7 @@ class ProcessOutputLogMixin:
             if collector is not None and collector.capture_error:
                 session.capture_error = session.capture_error or collector.capture_error
             with self._lock:
+                self._prune_if_needed()
                 self._running[session.id] = session
                 ready.set()
         try:

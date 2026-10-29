@@ -166,6 +166,7 @@ def spawn_background_process(
     exit_code 0 immediately, so the stale-interrupt kill cannot occur here.
     """
     from tools.process_registry import process_registry
+    from tools.environments.capture import OutputCaptureError, capture_fields
     from tools.terminal_tool import (
         _redact_terminal_error_text, _resolve_command_cwd, _resolve_notification_flag_conflict,
     )
@@ -228,6 +229,11 @@ def spawn_background_process(
             proc_session.watch_patterns = list(watch_patterns)
             result_data["watch_patterns"] = proc_session.watch_patterns
         return json.dumps(result_data, ensure_ascii=False)
+    except OutputCaptureError:
+        error = ("Background command may already have started; output capture is incomplete. "
+                 "Inspect its effects before considering a retry.")
+        return json.dumps({"output": "", "exit_code": None, "error": error,
+                           **capture_fields(error)}, ensure_ascii=False)
     except Exception as e:
         return json.dumps({
             "output": "", "exit_code": -1,
