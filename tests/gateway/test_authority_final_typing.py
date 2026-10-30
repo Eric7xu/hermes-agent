@@ -73,7 +73,9 @@ async def test_authority_delivery_stops_typing_on_exit(typing_adapter, monkeypat
             with pytest.raises(RuntimeError, match='delivery failed'):
                 await delivery
         else:
-            await delivery
+            delivered = await delivery
+            if not recovered:
+                assert delivered is True, 'typing cleanup must preserve the delivery verdict'
         if recovered:
             assert not authority.pending_deliveries
         assert task.done(), 'authority delivery left persistent transport typing alive'
