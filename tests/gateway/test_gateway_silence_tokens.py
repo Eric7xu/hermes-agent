@@ -97,7 +97,7 @@ def test_failed_agent_result_never_counts_as_intentional_silence():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reply_expected", [None, True], ids=["adapter-unknown", "addressed"])
-async def test_human_turn_gets_a_visible_fallback_for_a_silence_marker(monkeypatch, tmp_path, reply_expected):
+async def test_human_turn_is_silent_by_default_for_a_successful_marker(monkeypatch, tmp_path, reply_expected):
     runner = _runner(monkeypatch, tmp_path)
     runner._run_agent = AsyncMock(return_value={
         "final_response": "[SILENT]",
@@ -116,7 +116,7 @@ async def test_human_turn_gets_a_visible_fallback_for_a_silence_marker(monkeypat
         _event(reply_expected=reply_expected), _source(), "agent:main:telegram:group:-1001:12345", 1
     )
 
-    assert response and not is_intentional_silence_response(response)
+    assert response == ""
 
 
 @pytest.mark.asyncio
@@ -187,7 +187,7 @@ async def test_scheduled_heartbeat_silence_suppresses_delivery(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
-async def test_queued_human_turn_also_gets_the_visible_fallback():
+async def test_queued_human_turn_is_silent_by_default():
     runner = gateway_run.GatewayRunner(GatewayConfig())
     runner._deliver_queued_first_response = AsyncMock()
     turn_ctx = SimpleNamespace(
@@ -208,8 +208,7 @@ async def test_queued_human_turn_also_gets_the_visible_fallback():
         turn_ctx, None, result, result, None,
     )
 
-    delivered = runner._deliver_queued_first_response.await_args.args[0]
-    assert delivered and not is_intentional_silence_response(delivered)
+    runner._deliver_queued_first_response.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -256,14 +255,19 @@ async def test_queued_terminal_turn_owns_the_silence_verdict(monkeypatch, tmp_pa
     runner._run_agent = AsyncMock(return_value=_result("internal_notification"))
     assert await runner._handle_message_with_agent(
         _event(), _source(), "agent:main:telegram:group:-1001:12345", 1) == ""
+    # With an explicit room opt-out, the terminal turn still owns the exemption.
+    guarded_config = GatewayConfig.from_dict({"platforms": {"telegram": {
+        "channel_overrides": {"-1001": {"allow_silence": False}}}}})
     # Internal opener, human terminal turn: visible fallback.
     runner = _runner(monkeypatch, tmp_path)
+    runner.config = guarded_config
     runner._run_agent = AsyncMock(return_value=_result(None))
     response = await runner._handle_message_with_agent(
         _event(internal=True), _source(), "agent:main:telegram:group:-1001:12345", 1)
     assert response and not is_intentional_silence_response(response)
     # Unaddressed opener, addressed terminal turn: visible fallback.
     runner = _runner(monkeypatch, tmp_path)
+    runner.config = guarded_config
     runner._run_agent = AsyncMock(return_value=_result(None, True))
     response = await runner._handle_message_with_agent(
         _event(reply_expected=False), _source(), "agent:main:telegram:group:-1001:12345", 1)

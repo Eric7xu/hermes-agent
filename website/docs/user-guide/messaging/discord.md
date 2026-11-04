@@ -361,6 +361,22 @@ discord:
 
 The existing `DISCORD_BOTS_REQUIRE_INLINE_MENTION=false` environment override is also supported when the YAML option is unset. With this opt-out, `mentions` accepts Discord's resolved mentions, including reply pings, and `all` removes the bot-specific mention requirement; other channel mention rules still apply. An admitted reply ping can also open the continuation window in this compatibility mode. Use it only for trusted relays because it restores the accidental reply-loop risk.
 
+#### Guild-scoped explicit collaboration
+
+For trusted guilds, set `platforms.discord.extra.bot_collaboration_guilds` to a list of
+quoted guild IDs, and enable `allow_bots: mentions` in the same `extra` block. This is opt-in
+and per receiving adapter. Every bot message in those guilds must independently contain a typed
+mention or reply to a verified receiver-owned message in the same guild and channel. An
+unresolved reply is fetched from that channel; missing, inaccessible or mismatched targets do
+not establish authorship. Bare IDs and automatic reply pings alone are not proof.
+
+Addressed collaborators can use existing or future posts and ordinary channels despite a positive
+`allowed_channels` list. `ignored_channels`, Discord permissions, `allow_bots: none`, deduplication
+and gateway loop guards still apply. Unaddressed debounce continuations are not admitted in these
+guilds, even with `allow_bots: all`. Other guilds, DMs, human authorization and control-command
+permissions retain their existing policy. Admission never forces a reply: healthy intentional
+silence follows the [room silence policy](./index.md#per-room-intentional-silence).
+
 ### Config File (`config.yaml`)
 
 The `discord` section in `~/.hermes/config.yaml` mirrors the env vars above. Config.yaml settings are applied as defaults — if the equivalent env var is already set, the env var wins.

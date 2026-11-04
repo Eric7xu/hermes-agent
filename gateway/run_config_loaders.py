@@ -145,10 +145,10 @@ class GatewayConfigLoadersMixin:
                 config, source.platform, source.chat_id,
                 thread_id=source.thread_id, parent_id=source.parent_chat_id)
         except Exception:
-            # No permission means the default reply rule; a lookup failure must not become an error reply.
+            # A failed lookup is not an absent override: do not lose an explicit False on error.
             logger.warning("Room allow_silence lookup failed for %s; keeping the reply rule",
                            source.chat_id, exc_info=True)
-            return None
+            return False
         return override.allow_silence if override is not None else None
 
     def _resolve_model_for_channel(

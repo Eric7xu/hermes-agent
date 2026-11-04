@@ -350,26 +350,28 @@ Details:
 ## Per-Room Intentional Silence
 
 In multi-agent rooms, a model may choose to end its turn with an explicit silence marker such as
-`NO_REPLY` or `[SILENT]`. To let a successful marker-only turn stay silent even when Hermes was
-mentioned or directly addressed, enable `allow_silence` for that room in the serving profile's
-`config.yaml`:
+`NO_REPLY` or `[SILENT]`. Healthy completed marker-only turns stay silent by default, including
+when Hermes was mentioned or directly addressed in an unconfigured or newly created room.
+To require a visible fallback instead, set `allow_silence: false` for that room in the serving
+profile's `config.yaml`:
 
 ```yaml
 platforms:
   matrix:
     channel_overrides:
       "!exampleTeamRoom:example.org":
-        allow_silence: true
+        allow_silence: false
 ```
 
-The default is the existing reply policy: omitted, `null`, or `false` keeps the visible warning
-when a human message needs a reply (or the adapter cannot tell). Internal notifications,
+Omitted, `null`, or `true` permits healthy completed silence. Explicit `false` keeps the visible
+warning when a human message needs a reply (or the adapter cannot tell). Internal notifications,
 scheduled heartbeats, and messages known to be unaddressed keep their existing silence exemptions,
-even with `allow_silence: false`. This is a room override, not a profile-wide setting.
+even with `allow_silence: false`. A failed policy lookup keeps the reply safeguard rather than
+assuming the override is absent. This is a room override, not a profile-wide setting.
 It uses the same chat ID → thread ID → parent ID lookup as other channel overrides; the first
 matching entry wins, including an explicit `false`. An entry that sets only other keys (say a
-thread with just `model:`) also matches first, so repeat `allow_silence` there to keep the
-parent's opt-in.
+thread with just `model:`) also matches first and uses the default silence policy; repeat
+`allow_silence: false` there to preserve a parent's opt-out.
 
 Restart the gateway after editing configuration so all serving profiles use the updated settings.
 The override affects final delivery only: it does not undo tool actions, retract progress already

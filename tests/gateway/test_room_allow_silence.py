@@ -50,11 +50,11 @@ def _configure(runner, tmp_path, *, setting=True, other_profile=False):
     (True, False, True, False, True),
     (True, False, None, False, True),
     (False, False, True, False, False),
-    (None, False, None, False, False),
-    ("null", False, True, False, False),
+    (None, False, None, False, True),
+    ("null", False, True, False, True),
     ("thread", False, True, False, True),
     ("parent", False, True, False, True),
-    (True, True, True, False, False),
+    (True, True, True, False, True),
     (False, False, False, False, True),
     (False, False, True, True, True),
 ])
@@ -117,9 +117,9 @@ async def test_room_config_controls_delivery(monkeypatch, tmp_path, lane, settin
     {"completed": False}, {"error": "provider error"}, {"final_response": ""},
     {"final_response": "An ordinary reply."},
 ])
-async def test_opt_in_does_not_hide_unhealthy_or_empty_results(monkeypatch, tmp_path, lane, changes):
+async def test_default_does_not_hide_unhealthy_or_empty_results(monkeypatch, tmp_path, lane, changes):
     runner = _runner(monkeypatch, tmp_path)
-    source = _configure(runner, tmp_path)
+    source = _configure(runner, tmp_path, setting=None)
     result = {"final_response": "NO_REPLY", "failed": False, "api_calls": 1, "messages": [], **changes}
     if lane == "normal":
         runner._run_agent = AsyncMock(return_value=result)
@@ -163,7 +163,8 @@ async def test_queued_terminal_source_owns_policy(monkeypatch, tmp_path, termina
     from gateway.session_identity import replace_source
     guarded_home = tmp_path / "guarded"
     guarded_home.mkdir()
-    (guarded_home / "config.yaml").write_text("{}\n", encoding="utf-8")
+    (guarded_home / "config.yaml").write_text(json.dumps({"platforms": {"telegram": {
+        "channel_overrides": {"-1001": {"allow_silence": False}}}}}), encoding="utf-8")
     guarded = replace_source(opted, profile="guarded")
     guarded._identity = RoutingIdentity("default", "guarded", tmp_path, guarded_home)
     opener, terminal = (guarded, opted) if terminal_opted_in else (opted, guarded)
@@ -263,7 +264,7 @@ def test_failed_room_lookup_keeps_the_reply_rule(monkeypatch, tmp_path):
 
     monkeypatch.setattr(runner, "_resolve_profile_home_for_source", _reject)
 
-    assert runner._room_allow_silence(source) is None
+    assert runner._room_allow_silence(source) is False
     assert runner._silence_allowed_for_source(source, None, True, {"final_response": "NO_REPLY"}) is False
 
 

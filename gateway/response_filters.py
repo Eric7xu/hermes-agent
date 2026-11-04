@@ -227,14 +227,16 @@ def silence_allowed(
     display_kind: Any, reply_expected: Optional[bool] = None, *,
     allow_silence: Optional[bool] = None, agent_result: Optional[dict] = None,
 ) -> bool:
-    """Keep existing exemptions; room opt-in additionally requires a healthy completed result.
+    """Keep existing exemptions; healthy completed results may otherwise be silent by default.
 
-    Marker recognition stays with the caller. Extra health restrictions apply only to the new
-    room permission, preserving the established internal/unaddressed semantics.
+    An explicit room False keeps the reply safeguard. Without a result this only answers the
+    legacy machinery/unaddressed exemption, so pre-run checks and completion-receipt recording
+    cannot mistake a policy default for proof of a successful turn. Marker recognition stays
+    with the caller; crash recovery must supply its exact persisted decision as permission.
     """
     if is_machinery_display_kind(display_kind) or reply_expected is False:
         return True
-    return (allow_silence is True and isinstance(agent_result, dict)
+    return ((allow_silence is None or allow_silence is True) and isinstance(agent_result, dict)
             and not any(agent_result.get(k) for k in ("failed", "partial", "interrupted", "error"))
             and agent_result.get("completed") is not False)
 

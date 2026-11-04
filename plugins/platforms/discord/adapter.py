@@ -1168,6 +1168,9 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw in {"true", "1", "yes", "on"}
 
 
+from plugins.platforms.discord.bot_collaboration import (
+    DiscordAdmissionMixin, addressed_collaborator, resolve_collaboration_reply,
+)
 from plugins.platforms.discord.adapter_media import DiscordMediaMixin
 from plugins.platforms.discord.adapter_opus import load_opus_codec
 from plugins.platforms.discord.adapter_authorization import DiscordAuthorizationMixin
@@ -1176,7 +1179,7 @@ from plugins.platforms.discord.adapter_thread_titles import DiscordThreadTitlesM
 from plugins.platforms.discord.adapter_voice_info import DiscordVoiceInfoMixin
 
 
-class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThreadTitlesMixin, DiscordVoiceInfoMixin,
+class DiscordAdapter(DiscordAdmissionMixin, DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThreadTitlesMixin, DiscordVoiceInfoMixin,
                      DiscordSlashAuthMixin, BasePlatformAdapter):
     """Discord bot adapter: guild/DM messages, threads, slash commands, button approvals, reactions."""
 
@@ -1627,87 +1630,6 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             return ("discord_intents_required", guidance, False)
         return ("discord_connect_error", f"Discord startup failed: {error}", True)
 
-    def _discord_message_admission(self, message: Any, *, claim: bool) -> tuple[bool, bool]:
-        """Return ``(admitted, role_authorized)`` for one Discord event."""
-        message_id = str(getattr(message, "id", ""))
-        if claim:
-            if self._dedup.is_duplicate(message_id):
-                return False, False
-        elif self._dedup.contains(message_id):
-            return False, False
-        if message.author == self._client.user:
-            return False, False
-        if message.type not in {discord.MessageType.default, discord.MessageType.reply}:
-            return False, False
-        role_authorized = False
-        if getattr(message.author, "bot", False):
-            allow_bots = self._get_allow_bots()
-            bot_tag_continuation = self._is_bot_tag_debounce_continuation(message)
-            if allow_bots == "none":
-                return False, False
-            if (
-                allow_bots == "mentions"
-                and not self._self_is_explicitly_mentioned(message)
-                and not bot_tag_continuation
-            ):
-                return False, False
-            if (
-                self._discord_bots_require_inline_mention()
-                and not self._self_is_raw_mentioned(message)
-                and not bot_tag_continuation
-            ):
-                return False, False
-        else:
-            msg_guild = getattr(message, "guild", None)
-            is_dm = isinstance(message.channel, discord.DMChannel) or msg_guild is None
-            msg_channel_ids = None
-            if not is_dm:
-                msg_channel_ids = {str(message.channel.id)}
-                parent_id = self._get_parent_channel_id(message.channel)
-                if parent_id:
-                    msg_channel_ids.add(parent_id)
-            if not self._is_allowed_user(
-                str(message.author.id), message.author, guild=msg_guild, is_dm=is_dm,
-                channel_ids=msg_channel_ids,
-            ):
-                self._warn_if_fail_closed_default()
-                return False, False
-            role_authorized = bool(getattr(self, "_allowed_role_ids", set()))
-        raw_self_mention = self._self_is_explicitly_mentioned(message)
-        if not isinstance(message.channel, discord.DMChannel) and (
-            message.mentions or raw_self_mention
-        ):
-            other_bots_mentioned = any(
-                mentioned.bot and mentioned != self._client.user
-                for mentioned in message.mentions
-            )
-            if other_bots_mentioned and not raw_self_mention:
-                return False, False
-            ignore_no_mention = _scoped_gate_env("DISCORD_IGNORE_NO_MENTION", "true").lower() in {"true", "1", "yes"}
-            if ignore_no_mention and not raw_self_mention and not other_bots_mentioned:
-                # A thread the bot joined is not someone else's conversation, and the other two
-                # ingress paths already exempt it: _dispatch_recovered_message() and
-                # _handle_message(). Admission runs on both and can veto what they admit, so
-                # without this a third-party mention in a bot thread is dropped here even though
-                # the same message with no mention at all is admitted. ``thread_require_mention``
-                # still gates multi-bot threads, inside _in_bot_thread().
-                if not self._in_bot_thread(message):
-                    parent_id = None
-                    if hasattr(message.channel, "parent_id") and message.channel.parent_id:
-                        parent_id = str(message.channel.parent_id)
-                    free_channels = self._discord_free_response_channels()
-                    channel_keys = self._discord_channel_keys(message, parent_id)
-                    if "*" not in free_channels and not (channel_keys & free_channels):
-                        # Every other silent return in this function is at least guessable from
-                        # the outside; this one is not, and an operator seeing no log line cannot
-                        # tell it apart from the gateway never receiving the event.
-                        logger.debug(
-                            "[%s] admission: dropping message %s — mentions others, not self, "
-                            "not a bot thread, channel not free-response",
-                            self.name, getattr(message, "id", "?"))
-                        return False, False
-        return True, role_authorized
-
     async def _dispatch_discord_message(self, message: Any) -> bool:
         """Apply Discord ingress policy and dispatch one live event."""
         if not self._ready_event.is_set():
@@ -1715,6 +1637,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 await asyncio.wait_for(self._ready_event.wait(), timeout=30.0)
             except TimeoutError:
                 pass
+        await resolve_collaboration_reply(self, message)
         admitted, role_authorized = self._discord_message_admission(message, claim=True)
         if not admitted:
             return False
@@ -2519,7 +2442,8 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
 
     async def _dispatch_recovered_message(self, message: Any) -> bool:
         """Run one recovered message through the live Discord ingress gates."""
-        if not isinstance(message.channel, discord.DMChannel):
+        await resolve_collaboration_reply(self, message)
+        if not addressed_collaborator(self, message) and not isinstance(message.channel, discord.DMChannel):
             parent_id = self._get_parent_channel_id(message.channel)
             channel_keys = self._discord_channel_keys(message, parent_id)
             free_channels = self._discord_free_response_channels()
@@ -6082,6 +6006,8 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         #   discord.no_thread_channels: Channel IDs where bot responds directly without creating thread
         #   discord.auto_thread: Auto-create thread on @mention in channels (default: true)
         #   discord.free_response_auto_thread: Free-response channels also auto-thread (default: false)
+        # Capture before stripping the typed mention from message.content.
+        guild_addressed = addressed_collaborator(self, message)
         thread_id = None
         parent_channel_id = None
         is_thread = isinstance(message.channel, discord.Thread)
@@ -6115,7 +6041,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 channel_ids.add(parent_channel_id)
             channel_keys = self._discord_channel_keys(message, parent_channel_id)
             allowed_channels = self._get_allowed_channels()
-            if allowed_channels:
+            if allowed_channels and not guild_addressed:
                 if "*" not in allowed_channels and not (channel_keys & allowed_channels):
                     logger.debug("[%s] Ignoring message in non-allowed channel: %s", self.name, channel_keys)
                     return False
@@ -6135,7 +6061,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 or is_voice_linked_channel
             )
             in_bot_thread = self._in_bot_thread(message)
-            if require_mention and not is_free_channel and not in_bot_thread:
+            if require_mention and not is_free_channel and not in_bot_thread and not guild_addressed:
                 if (
                     not self._self_is_explicitly_mentioned(message)
                     and not mention_prefix
