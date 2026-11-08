@@ -5,6 +5,7 @@ gateway.platforms.*.
 """
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -19,6 +20,27 @@ from gateway.session import SessionSource
 # The pattern matches to end-of-line (not just whitespace-bounded) to handle
 # Windows paths that may contain spaces (e.g. "C:\Users\John Doe\image.png").
 _ATTACHMENT_REF_RE = re.compile(r"^(?:@(?:image|file|url):[^\n]+\n?)+", re.IGNORECASE)
+
+_MAX_FILENAME_CHARS = 255
+
+
+def clean_attachment_filename(name: object) -> str:
+    """An untrusted attachment filename reduced to a display-safe basename; ``""`` when unusable.
+
+    Directory parts (either separator), control and format characters (CR/LF, NUL, bidi
+    overrides) are dropped and the length is capped with the extension kept. Never a storage
+    path: callers keep their own random cache names."""
+    if not isinstance(name, str):
+        return ""
+    base = name.replace("\\", "/").rsplit("/", 1)[-1]
+    base = "".join(ch for ch in base if unicodedata.category(ch) not in {"Cc", "Cf"}).strip()
+    if base in {"", ".", ".."}:
+        return ""
+    if len(base) > _MAX_FILENAME_CHARS:
+        stem, dot, ext = base.rpartition(".")
+        keep = f"{dot}{ext}" if stem and len(ext) <= 16 else ""
+        base = base[: _MAX_FILENAME_CHARS - len(keep)] + keep
+    return base
 
 
 class MessageType(Enum):
@@ -98,7 +120,7 @@ class MessageEvent:
     # so untrusted payload text stays conversational. New fields append after it (positional compat).
     allow_gateway_control: bool = True
     # Was this message addressed to this bot? None means the adapter did not know.
-    # Retained as turn provenance; it never vetoes successful intentional silence.
+    # Provenance for explicit room rules and recovery; addressed turns may be silent by default.
     reply_expected: Optional[bool] = None
     # Set for synthetic turns that carry no channel inputs of their own (goal continuation,
     # heartbeat due-prompts, /goal resume) so the turn reuses the session's pinned channel
@@ -110,9 +132,17 @@ class MessageEvent:
     # ``message_id`` with new text, so native admission keys it apart from the original send.
     # Appended for positional compat (see the field-order rule above).
     edit_revision: Optional[str] = None
+    # Original filename per attachment, parallel to ``media_urls`` like ``media_types`` ("" =
+    # unknown). For adapters whose ``media_urls`` are random cache names (relay); the name is
+    # display data only, never a path. Appended for positional compat.
+    media_filenames: list[str] = field(default_factory=list)
 
     # Process-local admission receipt, never routing metadata or execution acknowledgement.
     _gateway_accepted: bool = field(default=False, init=False, repr=False, compare=False)
+    # Set when ``admit_internal_event`` hands its producer a receipt before any drain began. The
+    # producer will not retry, so a restart drain runs this event instead of refusing it at the
+    # drain gate or discarding it as a queued follow-up (#138123).
+    _admitted_before_drain: bool = field(default=False, init=False, repr=False, compare=False)
     # Run-owned final presentation snapshot; never deserialized from ingress metadata.
     _notification_reply_muted: Optional[bool] = field(default=None, init=False, repr=False, compare=False)
 
@@ -120,6 +150,17 @@ class MessageEvent:
         """One turn now answers *other* too: an addressed message wins, then an unknown one."""
         if self.reply_expected is not True and other.reply_expected is not False:
             self.reply_expected = other.reply_expected
+
+    def extend_media(self, other: "MessageEvent") -> None:
+        """Append *other*'s attachments (urls, types and original names) to this event's. Names are
+        padded with ``""`` on either side so each stays on its own attachment; events without names
+        (native adapters keep the name in the cache path) leave ``media_filenames`` untouched."""
+        if self.media_filenames or other.media_filenames:
+            def pad(msg: "MessageEvent") -> list[str]:
+                return (list(msg.media_filenames) + [""] * len(msg.media_urls))[: len(msg.media_urls)]
+            self.media_filenames = pad(self) + pad(other)
+        self.media_urls.extend(other.media_urls)
+        self.media_types.extend(other.media_types)
 
     def _command_text(self) -> str:
         """Return the message text with leading Desktop attachment refs stripped.
