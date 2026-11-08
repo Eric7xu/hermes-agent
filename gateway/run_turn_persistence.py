@@ -141,16 +141,17 @@ class GatewayTurnPersistenceMixin:
             is_intentional_silence_response, is_machinery_display_kind, strip_trailing_silence_marker,
         )
         from gateway.run_turn import _unexpected_silence_reply
+        _silence_source = agent_result.get("queued_terminal_source", source)
+        _notices_allowed = automatic_notices_allowed(_silence_source)
         if not _intentional_silence and is_intentional_silence_response(response):
             # A partial marker must not reach the adapter's text-only silence filter.
             # Failure copy is a runtime notice, not a model reply to a bot peer.
-            response = _unexpected_silence_reply() if automatic_notices_allowed(source) else ""
+            response = _unexpected_silence_reply() if _notices_allowed else ""
         _silence_kind = agent_result.get("queued_terminal_display_kind", persist_user_display_kind)
         _silence_reply_expected = agent_result.get("queued_terminal_reply_expected", reply_expected)
-        _silence_source = agent_result.get("queued_terminal_source", source)
         # A bot peer expects no reply even when it addressed us (a DM, a mention): its message may end
         # the exchange in silence, and the visible fallback would be runtime text it answers (#137027).
-        if not automatic_notices_allowed(_silence_source):
+        if not _notices_allowed:
             _silence_reply_expected = False
         if _intentional_silence and not self._silence_allowed_for_source(
             _silence_source, _silence_kind, _silence_reply_expected, agent_result,
@@ -170,7 +171,7 @@ class GatewayTurnPersistenceMixin:
         # "(empty)" = the model produced no visible content after exhausting all retries. One
         # text with the CLI explainer and the desktop (agent/turn_explainers.py) so the user
         # reads the same words on every surface.
-        if not automatic_notices_allowed(source) and (response == "(empty)" or agent_result.get("failed")):
+        if not _notices_allowed and (response == "(empty)" or agent_result.get("failed")):
             # A failed or empty turn's text is runtime failure copy, never the model's answer: a bot
             # peer would take it as a message to answer (#137027).
             response = ""
@@ -201,7 +202,7 @@ class GatewayTurnPersistenceMixin:
             response = strip_trailing_silence_marker(response)
             # A bot peer gets the model's own words only: the runtime's retry hints and "not
             # processed" lines are new inbound messages for its turn loop (#137027).
-            if automatic_notices_allowed(source):
+            if _notices_allowed:
                 response = _normalize_empty_agent_response(agent_result, response, history_len=len(history))
             response = _sanitize_gateway_final_response(source.platform, response)
 
