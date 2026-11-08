@@ -74,23 +74,9 @@ class GatewayTurnPersistenceMixin:
         if _is_gateway_hidden_reasoning_incomplete_turn(agent_result):
             response = ""
         _intentional_silence = self._is_intentional_silence(agent_result, response)
-        # A queued (/queue) chain's TERMINAL turn owns the silence verdict, not the event that
-        # opened the chain: an internal follow-up, or a message not addressed to the bot, may go
-        # silent; any other human one must not.
-        from gateway.response_filters import is_machinery_display_kind, silence_allowed
-        from gateway.run_turn import _unexpected_silence_reply
-        _silence_kind = agent_result.get("queued_terminal_display_kind", persist_user_display_kind)
-        _silence_reply_expected = agent_result.get("queued_terminal_reply_expected", reply_expected)
-        if _intentional_silence and not silence_allowed(_silence_kind, _silence_reply_expected):
-            logger.warning(
-                "silence marker rejected on a user turn: platform=%s chat=%s",
-                _platform_name, source.chat_id or "unknown",
-            )
-            _intentional_silence = False
-            response = _unexpected_silence_reply()
-        elif _intentional_silence and not is_machinery_display_kind(_silence_kind):
+        if _intentional_silence:
             logger.debug(
-                "silence marker suppressed on an unaddressed turn: platform=%s chat=%s",
+                "Suppressing intentional silence: platform=%s chat=%s",
                 _platform_name, source.chat_id or "unknown",
             )
 
@@ -563,7 +549,9 @@ class GatewayTurnPersistenceMixin:
         # Intentional silence is a delivery decision: the [SILENT] turn stays persisted (alternation).
         if _intentional_silence:
             logger.info("Suppressing intentional silence marker for session %s", session_entry.session_id)
-            response = ""
+            # Already-emitted progress cannot be retracted here. Do not add voice,
+            # media or a trailing runtime footer to an intentionally silent final.
+            return ""
 
         adapter = self._delivery_adapter_for(source)
         # Auto voice reply (TTS audio before the text) unless streaming TTS already delivered audio.

@@ -26,8 +26,7 @@ from gateway.media_repair import repair_explicit_computer_use_media_paths
 from gateway.platforms.base import BasePlatformAdapter, ProcessingOutcome
 from gateway.platforms.event import MessageEvent
 from gateway.response_filters import (
-    display_kind_for_event, display_metadata_for_event, is_machinery_display_kind, reply_expected_metadata,
-    silence_allowed,
+    display_kind_for_event, display_metadata_for_event, reply_expected_metadata,
 )
 from gateway.warning_notifications import diagnostic_metadata, diagnostic_turn_muted, diagnostic_wake_muted
 from gateway.session import (
@@ -84,11 +83,6 @@ _CONTEXT_OVERFLOW_ERROR_PHRASES = (
     "request entity too large", "prompt is too long",
     "payload too large", "input is too long",
 )
-
-def _unexpected_silence_reply() -> str:
-    """Reply when the model returned only a silence marker for a message that needed an answer."""
-    return t("gateway.errors.unexpected_silence")
-
 
 def _bg_prompt_preview(prompt: str, limit: int = 60) -> str:
     """Short single-line quote of a /bg prompt for its failure notice (the task id means nothing to the user)."""
@@ -1780,19 +1774,11 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
         )
         # Same silence predicate as the normal path, else this branch leaks the literal marker.
         if self._is_intentional_silence(_delivery_result, first_response):
-            if silence_allowed(turn_ctx.persist_user_display_kind, turn_ctx.reply_expected):
-                logger.info(
-                    "Queued follow-up for session %s: suppressing intentional silence marker before continuing.",
-                    session_key or "?",
-                )
-                first_response = ""
-            else:
-                logger.warning(
-                    "Queued follow-up for session %s: replacing a human-turn silence marker.",
-                    session_key or "?",
-                )
-                first_response = _unexpected_silence_reply()
-                _already_streamed = False
+            logger.info(
+                "Queued follow-up for session %s: suppressing intentional silence marker before continuing.",
+                session_key or "?",
+            )
+            first_response = ""
         # Failed turns deliver their text but never their attachments (completed-turn parity).
         _deliver_media = not _delivery_result.get("failed")
         if first_response:

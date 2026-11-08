@@ -97,9 +97,8 @@ class MessageEvent:
     # May this event resolve gateway commands / control prompts? Proactive plugin events set False
     # so untrusted payload text stays conversational. New fields append after it (positional compat).
     allow_gateway_control: bool = True
-    # Was this message addressed to this bot? False lets a bare silence marker stand (the adapter
-    # knows the message was meant for someone else); None means unknown and keeps the visible
-    # fallback, like True.
+    # Was this message addressed to this bot? None means the adapter did not know.
+    # Retained as turn provenance; it never vetoes successful intentional silence.
     reply_expected: Optional[bool] = None
     # Set for synthetic turns that carry no channel inputs of their own (goal continuation,
     # heartbeat due-prompts, /goal resume) so the turn reuses the session's pinned channel

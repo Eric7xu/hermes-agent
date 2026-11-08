@@ -792,16 +792,14 @@ class GatewayStartupMixin:
 
     def _crash_left_reply(self, history: list, started: float, origin) -> Optional[str]:
         """What a crash-left turn owes, judged as live delivery would have: ``None`` when it never
-        persisted a final reply after *started*; ``""`` when nothing would have been presented (a
-        silence marker on a machinery turn or on a turn the adapter reported as not addressed to the
-        bot, a muted diagnostic wake); else the text to send, with any other bare silence marker
-        replaced by the same notice the live path sends."""
+        persisted a final reply after *started*; ``""`` for a completed silence marker or muted
+        diagnostic wake; else the text to send. Failed turns persist a visible failure notice,
+        not a successful silence marker."""
         from gateway.platforms.base import _strip_media_directives
         from gateway.response_filters import (
-            is_intentional_silence_response, is_machinery_display_kind, silence_allowed,
+            is_intentional_silence_response, is_machinery_display_kind,
         )
         from gateway.run import _sanitize_gateway_final_response
-        from gateway.run_turn import _unexpected_silence_reply
         from gateway.warning_notifications import diagnostic_turn_muted
         from hermes_cli.timefmt import coerce_epoch
         visible = [m for m in history if m.get("role") not in ("session_meta", "system")]
@@ -820,9 +818,7 @@ class GatewayStartupMixin:
                 if diagnostic_turn_muted(prompt.get("display_metadata"), origin.platform):
                     return ""
         if is_intentional_silence_response(last["content"]):
-            silent_ok = silence_allowed(
-                prompt.get("display_kind"), (prompt.get("display_metadata") or {}).get("reply_expected"))
-            return "" if silent_ok else _unexpected_silence_reply()
+            return ""
         return _strip_media_directives(_sanitize_gateway_final_response(origin.platform, last["content"])).strip() or None
 
     @staticmethod

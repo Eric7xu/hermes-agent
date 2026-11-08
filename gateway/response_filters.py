@@ -28,8 +28,8 @@ _BRACKETED_SILENCE_MARKERS = tuple(
     sorted(m for m in LIVE_GATEWAY_SILENT_MARKERS if m.startswith("["))
 )
 
-# The persisted user-row kind of a self-injected MessageEvent(internal=True) turn; only these
-# machinery kinds may vanish on a bare silence marker.
+# Persisted user-row kinds identifying self-injected machinery events. Presentation
+# policy for these events is independent of successful intentional silence.
 INTERNAL_NOTIFICATION_DISPLAY_KIND = "internal_notification"
 # Async-result cards the in-process TUI persisted: a producer's internal event naming one (with a
 # display_text) persists as that row kind instead of internal_notification.
@@ -144,23 +144,24 @@ def display_metadata_for_event(event: Any) -> dict:
 
 
 def is_machinery_display_kind(display_kind: Any) -> bool:
-    """Only a machinery turn may vanish on a bare silence marker; a human turn gets a visible fallback.
-
-    The caller passes the current turn's persisted display kind instead of inferring it from the
-    transcript: the inbound user row is not persisted yet, and a previous internal row must never
-    authorize silence on a human turn.
-    """
+    """Whether the persisted row describes a self-injected machinery turn."""
     return display_kind in MACHINERY_DISPLAY_KINDS
 
 
 def silence_allowed(display_kind: Any, reply_expected: Optional[bool] = None) -> bool:
-    """Whether a successful bare silence marker may remain silent for this turn."""
-    return is_machinery_display_kind(display_kind) or reply_expected is False
+    """Successful intentional silence is allowed regardless of sender or addressing.
+
+    Kept for callers carrying legacy turn metadata. This is not a success or
+    marker check: delivery must use ``is_intentional_silence_agent_result``.
+    """
+    return True
 
 
 def reply_expected_metadata(reply_expected: Optional[bool]) -> dict:
-    """The persisted user row's ``reply_expected`` key, only when the adapter knew; crash recovery
-    reads it back to judge a silence marker as the live turn did."""
+    """Persist addressing provenance only when the adapter knew it.
+
+    This metadata does not determine whether successful silence is allowed.
+    """
     return {} if reply_expected is None else {"reply_expected": reply_expected}
 
 

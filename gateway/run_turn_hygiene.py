@@ -338,7 +338,7 @@ class GatewayTurnHygieneMixin:
 
     async def _hmwa_hygiene_on_turn_hold(self, attempt, hs, session_entry, session_key, source):
         """``except HygieneTurnHoldExceeded`` body: keep or cancel the worker's commit admission,
-        notify the user, and re-raise; returns the compressed transcript only when the worker
+        log the deferral, and re-raise; returns the compressed transcript only when the worker
         was already committing.
 
         Turn-hold expiry is an availability boundary, not a failure: the streak must NOT advance,
@@ -413,9 +413,8 @@ class GatewayTurnHygieneMixin:
             "proceeding without compression this turn%s",
             session_entry.session_id, time.monotonic() - attempt.wait_started, _log_suffix,
         )
-        await self._hmwa_hygiene_notify(
-            source, attempt.meta, t("gateway.compress.turnhold_deferred"), "compression-turnhold notice",
-        )
+        # Routine deferral stays log-only, even with progress enabled: the eventual
+        # reply may intentionally be silent. Actionable failures notify separately.
         raise
 
     async def _hmwa_hygiene_on_timeout(self, attempt, hs, session_entry, session_key, source):
