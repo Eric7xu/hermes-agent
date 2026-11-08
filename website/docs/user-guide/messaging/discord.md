@@ -377,6 +377,15 @@ guilds, even with `allow_bots: all`. Other guilds, DMs, human authorization and 
 permissions retain their existing policy. Admission never forces a reply: healthy intentional
 silence follows the [room silence policy](./index.md#per-room-intentional-silence).
 
+For a narrower legacy exception, `platforms.discord.extra.bot_reply_allowlist` accepts
+objects with exactly `guild_id`, `channel_id`, and `author_id` (quoted IDs). Only that bot's
+verified same-channel reply to the receiving bot relaxes the bot mention gates. Unlike the
+guild policy, it does **not** bypass `allowed_channels` or grant access to other posts.
+Missing reply targets use a bounded same-channel fetch; deleted, forbidden, timed-out or
+mismatched targets fail closed. `allow_bots: none`, ignored channels and deduplication still win.
+Neither exception inherits guild authorization from channel metadata when the event's guild
+is missing or different, and neither applies to DMs.
+
 ### Config File (`config.yaml`)
 
 The `discord` section in `~/.hermes/config.yaml` mirrors the env vars above. Config.yaml settings are applied as defaults — if the equivalent env var is already set, the env var wins.

@@ -1617,24 +1617,9 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
         _already_streamed = self._run_agent_stream_confirmed_final_delivery(
             _sc, first_response, previewed=bool(_delivery_result.get("response_previewed")),
         )
-        # Same silence predicate as the normal path, else this branch leaks the literal marker.
-        _silent = False
-        if self._is_intentional_silence(_delivery_result, first_response):
-            _silent = self._silence_allowed_for_source(
-                turn_ctx.source, turn_ctx.persist_user_display_kind, turn_ctx.reply_expected, _delivery_result)
-            if _silent:
-                logger.info(
-                    "Queued follow-up for session %s: suppressing intentional silence marker before continuing.",
-                    session_key or "?",
-                )
-                first_response = ""
-            else:
-                logger.warning(
-                    "Queued follow-up for session %s: replacing a human-turn silence marker.",
-                    session_key or "?",
-                )
-                first_response = _unexpected_silence_reply()
-                _already_streamed = False
+        first_response, _silent = self._queued_silence_response(turn_ctx, _delivery_result, first_response)
+        if first_response != _delivery_result.get("final_response", "") and not _silent:
+            _already_streamed = False
         await self._record_room_silence_decision(
             session_key, _delivery_result, _silent,
             display_kind=turn_ctx.persist_user_display_kind, reply_expected=turn_ctx.reply_expected)

@@ -64,6 +64,21 @@ class GatewayTurnPersistenceMixin:
         except Exception:
             return False
 
+    def _queued_silence_response(self, turn_ctx, result, response):
+        """Queue delivery uses the same health and policy gates as the terminal turn."""
+        from gateway.response_filters import is_intentional_silence_response
+        from gateway.run_turn import _unexpected_silence_reply
+        silent = self._is_intentional_silence(result, response) and self._silence_allowed_for_source(
+            turn_ctx.source, turn_ctx.persist_user_display_kind, turn_ctx.reply_expected, result)
+        if silent:
+            logger.info("Queued follow-up for session %s: suppressing intentional silence marker before continuing.",
+                        turn_ctx.session_key or "?")
+            return "", True
+        if is_intentional_silence_response(response):
+            # Text-only adapter filtering cannot distinguish an incomplete marker from success.
+            return _unexpected_silence_reply(), False
+        return response, False
+
     async def _record_room_silence_decision(
         self, session_key, agent_result, silent, *, display_kind=None, reply_expected=None,
     ):
@@ -119,11 +134,15 @@ class GatewayTurnPersistenceMixin:
         if _is_gateway_hidden_reasoning_incomplete_turn(agent_result):
             response = ""
         _intentional_silence = self._is_intentional_silence(agent_result, response)
-        # A queued (/queue) chain's TERMINAL turn owns the silence verdict, not the event that
-        # opened the chain: an internal follow-up, or a message not addressed to the bot, may go
-        # silent; any other human one must not.
-        from gateway.response_filters import is_machinery_display_kind, strip_trailing_silence_marker
+        # A queued chain's terminal source owns policy, not the event that opened it.
+        # Healthy turns default to silence; explicit room rules and existing exemptions remain.
+        from gateway.response_filters import (
+            is_intentional_silence_response, is_machinery_display_kind, strip_trailing_silence_marker,
+        )
         from gateway.run_turn import _unexpected_silence_reply
+        if not _intentional_silence and is_intentional_silence_response(response):
+            # A partial marker must not reach the adapter's text-only silence filter.
+            response = _unexpected_silence_reply()
         _silence_kind = agent_result.get("queued_terminal_display_kind", persist_user_display_kind)
         _silence_reply_expected = agent_result.get("queued_terminal_reply_expected", reply_expected)
         _silence_source = agent_result.get("queued_terminal_source", source)
@@ -633,7 +652,9 @@ class GatewayTurnPersistenceMixin:
         # Intentional silence is a delivery decision: the [SILENT] turn stays persisted (alternation).
         if _intentional_silence:
             logger.info("Suppressing intentional silence marker for session %s", session_entry.session_id)
-            response = ""
+            # Previously emitted progress stays visible; a silent final must not start
+            # voice, media delivery or append a runtime-only footer.
+            return ""
 
         adapter = self._delivery_adapter_for(source)
         # Auto voice reply (TTS audio before the text) unless streaming TTS already delivered audio.

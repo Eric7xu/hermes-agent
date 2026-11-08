@@ -17,7 +17,8 @@ def in_collaboration_guild(adapter, message):
     rules = adapter.config.extra.get("bot_collaboration_guilds", [])
     guild_id = str(getattr(getattr(message, "guild", None), "id", ""))
     return (
-        isinstance(rules, list)
+        not isinstance(message.channel, discord.DMChannel)
+        and isinstance(rules, list)
         and guild_id.isascii() and guild_id.isdecimal() and int(guild_id) > 0
         and guild_id in rules
         and getattr(message.author, "bot", False) is True
@@ -27,7 +28,9 @@ def in_collaboration_guild(adapter, message):
 
 def own_reply(adapter, message):
     reference = getattr(message, "reference", None)
-    if message.type != discord.MessageType.reply or reference is None:
+    if (message.type != discord.MessageType.reply or reference is None
+            or getattr(message, "guild", None) is None
+            or isinstance(message.channel, discord.DMChannel)):
         return False
     target = getattr(reference, "resolved", None) or getattr(reference, "cached_message", None)
     own_id = getattr(adapter._client.user, "id", None)
@@ -43,6 +46,23 @@ def own_reply(adapter, message):
     )
 
 
+def scoped_reply_candidate(adapter, message):
+    """The legacy exception grants only mention-gate relief for one exact transport scope."""
+    rules = adapter.config.extra.get("bot_reply_allowlist", [])
+    if (not isinstance(rules, list) or not rules
+            or message.type != discord.MessageType.reply
+            or getattr(message.author, "bot", False) is not True
+            or isinstance(message.channel, discord.DMChannel)):
+        return False
+    scope = {
+        "guild_id": str(getattr(getattr(message, "guild", None), "id", "")),
+        "channel_id": str(getattr(message.channel, "id", "")),
+        "author_id": str(getattr(message.author, "id", "")),
+    }
+    return (all(value.isascii() and value.isdecimal() and int(value) > 0 for value in scope.values())
+            and any(isinstance(rule, dict) and rule == scope for rule in rules))
+
+
 def addressed_collaborator(adapter, message):
     return in_collaboration_guild(adapter, message) and (
         adapter._self_is_raw_mentioned(message) or own_reply(adapter, message)
@@ -51,7 +71,7 @@ def addressed_collaborator(adapter, message):
 
 async def resolve_collaboration_reply(adapter, message):
     """Only fetch a same-channel reply for an eligible bot; a snowflake alone proves nothing."""
-    if (not in_collaboration_guild(adapter, message)
+    if (not (in_collaboration_guild(adapter, message) or scoped_reply_candidate(adapter, message))
             or adapter._get_allow_bots() == "none"
             or adapter._self_is_raw_mentioned(message)
             or message.type != discord.MessageType.reply
@@ -78,6 +98,9 @@ async def resolve_collaboration_reply(adapter, message):
 
 
 class DiscordAdmissionMixin:
+    def _is_scoped_own_bot_reply(self, message):
+        return scoped_reply_candidate(self, message) and own_reply(self, message)
+
     def _collaboration_bot_admitted(self, message, guild_addressed):
         allow_bots = self._get_allow_bots()
         if allow_bots == "none":
@@ -85,6 +108,8 @@ class DiscordAdmissionMixin:
         # No continuation window or free-response setting permits unaddressed guild chatter.
         if in_collaboration_guild(self, message):
             return guild_addressed
+        if self._is_scoped_own_bot_reply(message):
+            return True
         continuation = self._is_bot_tag_debounce_continuation(message)
         if allow_bots == "mentions" and not self._self_is_explicitly_mentioned(message) and not continuation:
             return False

@@ -2453,6 +2453,7 @@ class DiscordAdapter(DiscordAdmissionMixin, DiscordAuthorizationMixin, DiscordMe
                 and not (channel_keys & free_channels)
                 and not self._in_bot_thread(message)
                 and not self._self_is_explicitly_mentioned(message)
+                and not self._is_scoped_own_bot_reply(message)
             ):
                 return False
         admitted, role_authorized = self._discord_message_admission(message, claim=False)
@@ -6066,6 +6067,7 @@ class DiscordAdapter(DiscordAdmissionMixin, DiscordAuthorizationMixin, DiscordMe
                     not self._self_is_explicitly_mentioned(message)
                     and not mention_prefix
                     and not self._is_bot_tag_debounce_continuation(message)
+                    and not self._is_scoped_own_bot_reply(message)
                 ):
                     return False
         # Auto-thread: isolate each @mention in a text channel into its own thread (Slack-style).
