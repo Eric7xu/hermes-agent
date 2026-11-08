@@ -205,5 +205,3 @@ async def test_stale_failure_never_notifies(monkeypatch, tmp_path):
     event = MessageEvent(text="test", source=source(), message_id="555555555555555555")
     assert await runner._handle_message_with_agent(event, event.source, "agent:main:discord:group:room", 1) is None
     adapter.send.assert_not_awaited()
-
-

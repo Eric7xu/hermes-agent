@@ -3,12 +3,58 @@ from __future__ import annotations
 
 import logging
 import re
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 
 from gateway.config import Platform
 from gateway.platforms.event import MessageEvent
 
 logger = logging.getLogger(__name__)
 _SNOWFLAKE = re.compile(r"[1-9][0-9]{16,19}\Z")
+
+
+@dataclass
+class _FailureDeliveryScope:
+    runner: object
+    session_key: str
+    generation: int
+    receipts: dict = field(default_factory=dict)
+
+
+_failure_scope: ContextVar[_FailureDeliveryScope | None] = ContextVar("bot_failure_delivery", default=None)
+
+
+def failure_delivery_scope(handler):
+    """Share receipts across queue/final/error objects only for this handler invocation.
+
+    Context-local ownership isolates simultaneous turns and is reset even on cancellation. The
+    native run key/generation also survives exception paths that no longer have a TurnContext.
+    """
+    from functools import wraps
+
+    @wraps(handler)
+    async def scoped(runner, event, source, _quick_key, run_generation):
+        token = _failure_scope.set(_FailureDeliveryScope(runner, _quick_key, run_generation))
+        try:
+            return await handler(runner, event, source, _quick_key, run_generation)
+        finally:
+            _failure_scope.reset(token)
+    return scoped
+
+
+def _delivery_receipts(runner, event, source, inbound, session_key, generation):
+    scope = _failure_scope.get()
+    if scope is not None and scope.runner is runner:
+        session_key, generation, receipts = scope.session_key, scope.generation, scope.receipts
+    else:
+        generation = generation if generation is not None else getattr(event, "_bot_failure_generation", None)
+        receipts = event.__dict__.setdefault("_bot_failure_receipts", {})
+    # This runs after the queued stream wait, not merely after _run_agent returns to its caller.
+    if generation is not None and not runner._is_session_run_current(session_key, generation):
+        return None, None
+    event._bot_failure_generation = generation
+    identity = (generation, source.platform, source.profile, source.chat_id, source.thread_id, inbound)
+    return receipts, identity
 
 
 def validated_owner_ids(value):
@@ -76,8 +122,8 @@ def _owner_ids(runner, source):
 async def deliver_bot_failure(runner, event, source, result, response, session_key, generation):
     """One combined referenced final, through the owning transport and native delivery ledger.
 
-    The receipt belongs to this result/event and run generation, not a permanent peer ban. A
-    rejected send stays in the ledger for bounded recovery; business work is never rerun here.
+    The handler's context-local receipt spans distinct queue/final/error event/result objects.
+    A rejected send stays in the ledger for bounded recovery; business work is never rerun here.
     """
     from gateway.platforms.base import BasePlatformAdapter
 
@@ -86,11 +132,8 @@ async def deliver_bot_failure(runner, event, source, result, response, session_k
         return
     source = result.get("queued_terminal_source", source)
     inbound = result.get("queued_terminal_inbound_id", event.message_id)
-    if generation is not None:
-        event._bot_failure_generation = generation
-    identity = (getattr(event, "_bot_failure_generation", None), source.profile, source.chat_id, source.thread_id, inbound)
-    receipts = event.__dict__.setdefault("_bot_failure_receipts", {})
-    if identity in receipts or result.get("_bot_failure_delivery"):
+    receipts, identity = _delivery_receipts(runner, event, source, inbound, session_key, generation)
+    if receipts is None or identity in receipts or result.get("_bot_failure_delivery"):
         return
     receipts[identity] = "attempting"
     result["_bot_failure_delivery"] = "attempting"
