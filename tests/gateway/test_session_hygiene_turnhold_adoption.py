@@ -36,6 +36,22 @@ from gateway.platforms.event import MessageEvent
 from gateway.session import SessionEntry, SessionSource
 
 
+@pytest.fixture(autouse=True)
+def isolate_post_turn_goals_db(monkeypatch):
+    # The fake runner owns no real goals DB. Keep post-turn hooks/managers running,
+    # but exclude their unrelated cold SessionDB bootstrap from the hygiene budget.
+    goals = importlib.import_module("hermes_cli.goals")
+    get_db = MagicMock(return_value=None)
+    acquire_db = MagicMock(side_effect=AssertionError("hygiene fixture opened a real goals DB"))
+    monkeypatch.setattr(goals, "_get_session_db", get_db)
+    monkeypatch.setattr(goals, "_acquire_session_db", acquire_db)
+    yield
+    # Verify the intended boundary was exercised, and detect a future bypass even
+    # if the production bootstrap catches the assertion as a best-effort failure.
+    get_db.assert_called()
+    acquire_db.assert_not_called()
+
+
 def _make_history(n_messages: int, content_size: int = 100) -> list:
     history = []
     content = "x" * content_size
