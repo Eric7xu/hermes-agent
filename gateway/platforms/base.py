@@ -4171,7 +4171,7 @@ class BasePlatformAdapter(ABC):
                 record_obligation, obligation_id=obligation_id, session_key=session_key,
                 platform=str(getattr(source.platform, "value", source.platform)),
                 chat_id=source.chat_id, thread_id=getattr(source, "thread_id", None),
-                content=text_content,
+                content=text_content, failure_delivery=getattr(event, "_failure_delivery", None),
                 adapter_profile=getattr(delivery_adapter, "_owner_profile", None))
             await asyncio.to_thread(mark_attempting, obligation_id)
             return obligation_id

@@ -490,7 +490,13 @@ class GatewayStartupMixin:
                 content = row.get("marker", RECOVERED_MARKER) + content
             metadata = {"thread_id": row["thread_id"]} if row.get("thread_id") else None
             try:
-                result = await adapter.send(chat_id=row["chat_id"], content=content, metadata=metadata)
+                from gateway.delivery_ledger import failure_delivery_for
+                failure_delivery = await asyncio.to_thread(failure_delivery_for, row["obligation_id"])
+                options = {}
+                if failure_delivery is not None:
+                    metadata = dict(metadata or {}, failure_owner_ids=failure_delivery.get("owner_ids", []))
+                    options["reply_to"] = failure_delivery.get("reply_to")
+                result = await adapter.send(chat_id=row["chat_id"], content=content, metadata=metadata, **options)
             except Exception as send_err:
                 logger.warning("obligation %s: redelivery send raised: %s", row["obligation_id"], send_err)
                 result = None

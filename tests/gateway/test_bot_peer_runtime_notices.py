@@ -1,8 +1,4 @@
-"""Runtime notices never reach a bot peer (#137027): the busy path, the failure copy, progress lanes.
-
-Each of these is a message the runtime wrote, not the model; delivered to another bot it is a new
-inbound turn there, which answers it, which is a new turn here. The model's own reply still goes.
-"""
+"""Routine notices stay quiet for Bot peers; terminal failure feedback is deliverable."""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -63,9 +59,9 @@ async def _shape(agent_result, source):
     {"final_response": "(empty)", "model": "m", "api_calls": 2, "messages": []},
     {"final_response": "", "failed": True, "error": "boom", "api_calls": 1, "messages": []},
 ], ids=["interrupted before start", "empty after retries", "failed turn"])
-async def test_runtime_failure_copy_is_not_the_reply_to_a_bot(agent_result):
+async def test_runtime_failure_copy_is_feedback_to_a_bot(agent_result):
     response, _silent, _messages = await _shape(dict(agent_result), _source(True))
-    assert response == ""
+    assert response and not _silent
     human, _silent, _messages = await _shape(dict(agent_result), _source(False))
     assert human  # the human control still gets the explanation
 

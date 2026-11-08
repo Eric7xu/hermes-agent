@@ -1429,6 +1429,8 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             **usage,
             **({"persisted_turn": persisted_turn} if persisted_turn else {}),
         }
+        from gateway.bot_failure_feedback import is_terminal_failure
+        common["_terminal_failure"] = is_terminal_failure(result)
         previewed = result.get("response_previewed", False)
         viewer_meta = {}
         if local_sinks is not None:

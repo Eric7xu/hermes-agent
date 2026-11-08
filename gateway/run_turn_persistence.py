@@ -56,6 +56,23 @@ def _acp_launch(runner, source) -> bool:
 
 
 class GatewayTurnPersistenceMixin:
+    async def _run_agent_inactivity_warning(self, worker, source, _status_thread_metadata) -> None:
+        """Staged one-shot warning before the inactivity timeout escalates."""
+        from gateway.run import _interim_metadata
+        _warn_adapter = self._delivery_adapter_for(source) if automatic_notices_allowed(source) else None
+        if not _warn_adapter:
+            return
+        try:
+            await _warn_adapter.emit_warning(
+                source.chat_id, t(
+                    "gateway.progress.stuck_warning",
+                    minutes=int(worker.agent_warning // 60) or 1,
+                    remaining=int((worker.agent_timeout - worker.agent_warning) // 60) or 1),
+                metadata=_interim_metadata(_status_thread_metadata), logical_platform=source.platform,
+            )
+        except Exception as _warn_err:
+            logger.debug("Inactivity warning send error: %s", _warn_err)
+
     @staticmethod
     def _is_intentional_silence(agent_result, response) -> bool:
         try:
@@ -146,10 +163,11 @@ class GatewayTurnPersistenceMixin:
         # "(empty)" = the model produced no visible content after exhausting all retries. One
         # text with the CLI explainer and the desktop (agent/turn_explainers.py) so the user
         # reads the same words on every surface.
-        if not automatic_notices_allowed(_silence_source) and (response == "(empty)" or agent_result.get("failed")):
-            # A failed or empty turn's text is runtime failure copy, never the model's answer: a bot
-            # peer would take it as a message to answer (#137027).
-            response = ""
+        from gateway.bot_failure_feedback import is_terminal_failure, failure_text
+        if not automatic_notices_allowed(_silence_source) and is_terminal_failure(agent_result):
+            agent_result["_terminal_failure"] = True
+            response = failure_text(agent_result, _silence_source, response)
+            _intentional_silence = False
         if response == "(empty)" and not _intentional_silence:
             from agent.turn_explainers import EMPTY_RESPONSE_EXPLANATION
 
@@ -615,7 +633,9 @@ class GatewayTurnPersistenceMixin:
         )
         if (delivered or agent_result.get("already_sent")) and not intentional_silence:
             self._note_bot_reply(source)
-        if isinstance(agent_result.get("usage_limit"), dict):
+        if isinstance(agent_result.get("usage_limit"), dict) and automatic_notices_allowed(
+            agent_result.get("queued_terminal_source", source)
+        ):
             self._schedule_usage_limit_offer(event, agent_result["usage_limit"], session_key=session_key,
                                              generation=run_generation)
         return delivered
@@ -635,6 +655,11 @@ class GatewayTurnPersistenceMixin:
             # media or a trailing runtime footer to an intentionally silent final.
             return ""
 
+        from gateway.bot_failure_feedback import deliver_bot_failure, is_terminal_failure
+        terminal_source = agent_result.get("queued_terminal_source", source)
+        if not automatic_notices_allowed(terminal_source) and is_terminal_failure(agent_result):
+            await deliver_bot_failure(self, event, terminal_source, agent_result, response, session_key, run_generation)
+            return None
         adapter = self._delivery_adapter_for(source)
         # Auto voice reply (TTS audio before the text) unless streaming TTS already delivered audio.
         _streaming_tts_done = adapter is not None and bool(
@@ -682,12 +707,19 @@ class GatewayTurnPersistenceMixin:
         await self._hmwa_stop_typing_for_turn(event, source)
         logger.exception("Agent error in session %s", session_key)
         status_code = getattr(e, "status_code", None)
+        failure_event = getattr(e, "_gateway_failure_event", event)
+        failure_source = failure_event.source
         if status_code in {400, 500} and len(prepared.history) > 50:
             # Context overflow / payload too large: a deterministic rejection (#107567), and the same
             # no-grow rule as the persist path (#1630) — nothing is written into an oversized session.
             from gateway.run import _context_overflow_reply
             from gateway.session_results import record_unexecuted_failure
-            return record_unexecuted_failure(_context_overflow_reply())
+            reply = record_unexecuted_failure(_context_overflow_reply())
+            if not automatic_notices_allowed(failure_source):
+                from gateway.bot_failure_feedback import deliver_bot_failure
+                await deliver_bot_failure(self, failure_event, failure_source, {"failed": True}, reply, session_key, None)
+                return None
+            return reply
         # Replay can coalesce inputs; only this input's durable marker establishes ownership.
         try:
             if prepared.message_text is not None and session_entry is not None:
@@ -728,9 +760,11 @@ class GatewayTurnPersistenceMixin:
         elif status_code == 400:
             status_hint = t("gateway.errors.hint_rejected")
         from gateway.session_results import record_unexecuted_failure
-        if not automatic_notices_allowed(source):
-            # The failure is recorded for the operator; the bot peer gets no apology to answer (#137027).
-            record_unexecuted_failure(t("gateway.errors.generic_failed"))
+        if not automatic_notices_allowed(failure_source):
+            from gateway.bot_failure_feedback import deliver_bot_failure
+            reply = record_unexecuted_failure(self._hmwa_add_failed_turn_notice(
+                t("gateway.errors.generic_failed_with_hint", hint=status_hint), PARTIAL_FAILED_TURN_NOTICE))
+            await deliver_bot_failure(self, failure_event, failure_source, {"failed": True}, reply, session_key, None)
             return None
         if getattr(e, "reason", None) == "launch_credentials_unavailable":
             # The session's own route key is gone or changed: /retry repeats it, /new is the way out.

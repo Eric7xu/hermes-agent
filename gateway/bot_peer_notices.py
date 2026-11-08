@@ -1,9 +1,9 @@
 """What the runtime itself may send to the author of an inbound message (#137027).
 
-A bot peer reads every message in its chat as a new inbound turn, so a runtime-written notice (busy
-ack, redirect, status, progress, warnings, failure copy, delegation failures) sent to it starts a
-turn there, whose reply starts one here. The model's own reply is the only thing a bot peer gets.
-Every automatic-notice egress asks ``automatic_notices_allowed``; none re-derives the rule.
+Routine runtime notices (busy acknowledgments, progress, status, compression and usage footers)
+remain quiet for Bot peers. Terminal failure feedback has a separate native delivery contract in
+``bot_failure_feedback``; useful model-authored replies and successful silence remain allowed.
+Every routine-notice egress asks ``automatic_notices_allowed``; none re-derives the rule.
 """
 
 from __future__ import annotations

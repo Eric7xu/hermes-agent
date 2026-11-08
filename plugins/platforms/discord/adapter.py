@@ -3287,6 +3287,11 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 channel = await self._resolve_channel(chat_id)
                 if not channel:
                     return SendResult(success=False, error=f"Channel {chat_id} not found")
+            from plugins.platforms.discord.adapter_failure_feedback import failure_send_options
+            failure_options = failure_send_options(metadata, reply_to, channel)
+            # A failure belongs HERE; never create a new forum post as an alert destination.
+            if failure_options is not None and self._is_forum_parent(channel):
+                return SendResult(success=False, error="Failure feedback requires the original channel/thread")
             # Forum channels reject channel.send() — create a thread post instead.
             if self._is_forum_parent(channel):
                 result = await self._send_to_forum(channel, content)
@@ -3302,8 +3307,11 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                     chunk_reference = reference
                 else:  # "first" (default) or "off"
                     chunk_reference = reference if i == 0 else None
+                options = {} if failure_options is None else {"allowed_mentions": failure_options["allowed_mentions"]}
+                if failure_options is not None:
+                    chunk_reference = failure_options["reference"] if i == 0 else None
                 try:
-                    msg = await channel.send(content=chunk, reference=chunk_reference)
+                    msg = await channel.send(content=chunk, reference=chunk_reference, **options)
                 except Exception as e:
                     if chunk_reference is not None and self._is_reply_reference_rejected(e):
                         logger.warning(
@@ -3311,7 +3319,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                             self.name, reply_to,
                         )
                         reference = None
-                        msg = await channel.send(content=chunk, reference=None)
+                        msg = await channel.send(content=chunk, reference=None, **options)
                     else:
                         raise
                 message_ids.append(str(msg.id))
