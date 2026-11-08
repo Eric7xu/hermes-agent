@@ -76,7 +76,8 @@ class GatewayTurnPersistenceMixin:
             return "", True
         if is_intentional_silence_response(response):
             # Text-only adapter filtering cannot distinguish an incomplete marker from success.
-            return _unexpected_silence_reply(), False
+            notice = _unexpected_silence_reply() if automatic_notices_allowed(turn_ctx.source) else ""
+            return notice, False
         return response, False
 
     async def _record_room_silence_decision(
@@ -142,7 +143,8 @@ class GatewayTurnPersistenceMixin:
         from gateway.run_turn import _unexpected_silence_reply
         if not _intentional_silence and is_intentional_silence_response(response):
             # A partial marker must not reach the adapter's text-only silence filter.
-            response = _unexpected_silence_reply()
+            # Failure copy is a runtime notice, not a model reply to a bot peer.
+            response = _unexpected_silence_reply() if automatic_notices_allowed(source) else ""
         _silence_kind = agent_result.get("queued_terminal_display_kind", persist_user_display_kind)
         _silence_reply_expected = agent_result.get("queued_terminal_reply_expected", reply_expected)
         _silence_source = agent_result.get("queued_terminal_source", source)

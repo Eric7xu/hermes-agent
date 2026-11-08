@@ -53,7 +53,10 @@ async def test_unhealthy_result_never_gets_silence_verdict(monkeypatch, tmp_path
     )
     assert silent is False
     from gateway.response_filters import is_intentional_silence_response
-    assert response and not is_intentional_silence_response(response)
+    if bot:
+        assert response == ""  # No runtime failure notice, and still not successful silence.
+    else:
+        assert response and not is_intentional_silence_response(response)
 
 
 @pytest.mark.asyncio
