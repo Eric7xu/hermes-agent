@@ -1,4 +1,4 @@
-"""Runtime-written failure copy must not become a new turn for a bot peer."""
+"""Health controls silence; genuine Bot failures get bounded feedback, not routine notices."""
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -36,7 +36,9 @@ async def _shape(runner, source, result):
     {"partial": True}, {"interrupted": True}, {"error": "provider unavailable"},
     {"completed": False}, {"failed": True}, {},
 ])
-async def test_marker_health_controls_both_delivery_lanes_and_receipts(bot, health):
+async def test_marker_health_controls_both_delivery_lanes_and_receipts(bot, health, monkeypatch):
+    failure_delivery = AsyncMock()
+    monkeypatch.setattr("gateway.bot_failure_feedback.deliver_bot_failure", failure_delivery)
     runner = _Runner()
     source = SessionSource(platform=Platform.DISCORD, chat_id="701", user_id="400", is_bot=bot)
     assert automatic_notices_allowed(source) is (not bot)
@@ -49,12 +51,12 @@ async def test_marker_health_controls_both_delivery_lanes_and_receipts(bot, heal
     queued, queued_silent = runner._queued_silence_response(ctx, result, "NO_REPLY")
     assert silent is (not health) and queued_silent is (not health)
     if health:
+        assert response and not is_intentional_silence_response(response)
         if bot:
-            assert response == queued == ""
+            assert queued == ""  # Actual queue delivery takes the dedicated failure lane.
+            assert result["_terminal_failure"] is True
         else:
-            assert response and queued
-            assert not is_intentional_silence_response(response)
-            assert not is_intentional_silence_response(queued)
+            assert queued and not is_intentional_silence_response(queued)
     else:
         assert is_intentional_silence_response(response)
         assert queued == ""
@@ -62,6 +64,7 @@ async def test_marker_health_controls_both_delivery_lanes_and_receipts(bot, heal
     runner._deliver_queued_first_response = AsyncMock(return_value=True)
     await runner._run_agent_deliver_first_response(ctx, None, result, result, None)
     assert runner._deliver_queued_first_response.await_count == int(bool(health) and not bot)
+    assert failure_delivery.await_count == int(bool(health) and bot)
     if health:
         runner.async_session_store.set_session_metadata.assert_not_awaited()
     else:
@@ -81,5 +84,10 @@ async def test_real_model_prose_is_not_runtime_failure_copy(bot, health):
     result = {"final_response": text, "api_calls": 1, "messages": [], **health}
     response, silent, _ = await _shape(runner, source, result)
     ctx = SimpleNamespace(source=source, persist_user_display_kind=None, reply_expected=True, session_key="lane")
-    assert response == text and silent is False
+    assert silent is False
+    if bot and health.get("partial"):
+        from agent.turn_failure_copy import PARTIAL_FAILED_TURN_NOTICE
+        assert text in response and PARTIAL_FAILED_TURN_NOTICE in response
+    else:
+        assert response == text
     assert runner._queued_silence_response(ctx, result, text) == (text, False)

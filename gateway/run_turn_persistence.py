@@ -56,6 +56,23 @@ def _acp_launch(runner, source) -> bool:
 
 
 class GatewayTurnPersistenceMixin:
+    async def _run_agent_inactivity_warning(self, worker, source, _status_thread_metadata) -> None:
+        """Staged one-shot warning before the inactivity timeout escalates."""
+        from gateway.run import _interim_metadata
+        _warn_adapter = self._delivery_adapter_for(source) if automatic_notices_allowed(source) else None
+        if not _warn_adapter:
+            return
+        try:
+            await _warn_adapter.emit_warning(
+                source.chat_id, t(
+                    "gateway.progress.stuck_warning",
+                    minutes=int(worker.agent_warning // 60) or 1,
+                    remaining=int((worker.agent_timeout - worker.agent_warning) // 60) or 1),
+                metadata=_interim_metadata(_status_thread_metadata), logical_platform=source.platform,
+            )
+        except Exception as _warn_err:
+            logger.debug("Inactivity warning send error: %s", _warn_err)
+
     @staticmethod
     def _is_intentional_silence(agent_result, response) -> bool:
         try:
@@ -68,8 +85,9 @@ class GatewayTurnPersistenceMixin:
         """Queue delivery uses the same health and policy gates as the terminal turn."""
         from gateway.response_filters import is_intentional_silence_response
         from gateway.run_turn import _unexpected_silence_reply
+        expected = turn_ctx.reply_expected if automatic_notices_allowed(turn_ctx.source) else False
         silent = self._is_intentional_silence(result, response) and self._silence_allowed_for_source(
-            turn_ctx.source, turn_ctx.persist_user_display_kind, turn_ctx.reply_expected, result)
+            turn_ctx.source, turn_ctx.persist_user_display_kind, expected, result)
         if silent:
             logger.info("Queued follow-up for session %s: suppressing intentional silence marker before continuing.",
                         turn_ctx.session_key or "?")
@@ -136,7 +154,6 @@ class GatewayTurnPersistenceMixin:
             response = ""
         _intentional_silence = self._is_intentional_silence(agent_result, response)
         # A queued chain's terminal source owns policy, not the event that opened it.
-        # Healthy turns default to silence; explicit room rules and existing exemptions remain.
         from gateway.response_filters import (
             is_intentional_silence_response, is_machinery_display_kind, strip_trailing_silence_marker,
         )
@@ -144,13 +161,11 @@ class GatewayTurnPersistenceMixin:
         _silence_source = agent_result.get("queued_terminal_source", source)
         _notices_allowed = automatic_notices_allowed(_silence_source)
         if not _intentional_silence and is_intentional_silence_response(response):
-            # A partial marker must not reach the adapter's text-only silence filter.
-            # Failure copy is a runtime notice, not a model reply to a bot peer.
+            # Unhealthy markers cannot enter the text-only filter; Bot failures use their dedicated lane.
             response = _unexpected_silence_reply() if _notices_allowed else ""
         _silence_kind = agent_result.get("queued_terminal_display_kind", persist_user_display_kind)
         _silence_reply_expected = agent_result.get("queued_terminal_reply_expected", reply_expected)
-        # A bot peer expects no reply even when it addressed us (a DM, a mention): its message may end
-        # the exchange in silence, and the visible fallback would be runtime text it answers (#137027).
+        # Preserve Bot-loop protection even in rooms that require human replies.
         if not _notices_allowed:
             _silence_reply_expected = False
         if _intentional_silence and not self._silence_allowed_for_source(
@@ -164,17 +179,18 @@ class GatewayTurnPersistenceMixin:
             response = _unexpected_silence_reply()
         elif _intentional_silence and not is_machinery_display_kind(_silence_kind):
             logger.debug(
-                "silence marker suppressed on an unaddressed or opted-in turn: platform=%s chat=%s",
+                "silence marker suppressed on an unaddressed or silence-enabled turn: platform=%s chat=%s",
                 _platform_name, source.chat_id or "unknown",
             )
 
         # "(empty)" = the model produced no visible content after exhausting all retries. One
         # text with the CLI explainer and the desktop (agent/turn_explainers.py) so the user
         # reads the same words on every surface.
-        if not _notices_allowed and (response == "(empty)" or agent_result.get("failed")):
-            # A failed or empty turn's text is runtime failure copy, never the model's answer: a bot
-            # peer would take it as a message to answer (#137027).
-            response = ""
+        from gateway.bot_failure_feedback import is_terminal_failure, failure_text
+        if not _notices_allowed and is_terminal_failure(agent_result):
+            agent_result["_terminal_failure"] = True
+            response = failure_text(agent_result, _silence_source, response)
+            _intentional_silence = False
         if response == "(empty)" and not _intentional_silence:
             from agent.turn_explainers import EMPTY_RESPONSE_EXPLANATION
 
@@ -286,6 +302,7 @@ class GatewayTurnPersistenceMixin:
         from gateway.run import _load_gateway_config, _platform_config_key, _terminal_scope_cwd
         from gateway.session_finite import finite_turn_required
         # A bot peer gets the model's words only: a streamed reply sends the footer as its own message.
+        source = agent_result.get("queued_terminal_source", source)
         if finite_turn_required() is True or not automatic_notices_allowed(source):
             return ""
         try:
@@ -639,7 +656,9 @@ class GatewayTurnPersistenceMixin:
         )
         if (delivered or agent_result.get("already_sent")) and not intentional_silence:
             self._note_bot_reply(source)
-        if isinstance(agent_result.get("usage_limit"), dict):
+        if isinstance(agent_result.get("usage_limit"), dict) and automatic_notices_allowed(
+            agent_result.get("queued_terminal_source", source)
+        ):
             self._schedule_usage_limit_offer(event, agent_result["usage_limit"], session_key=session_key,
                                              generation=run_generation)
         return delivered
@@ -655,10 +674,15 @@ class GatewayTurnPersistenceMixin:
         # Intentional silence is a delivery decision: the [SILENT] turn stays persisted (alternation).
         if _intentional_silence:
             logger.info("Suppressing intentional silence marker for session %s", session_entry.session_id)
-            # Previously emitted progress stays visible; a silent final must not start
-            # voice, media delivery or append a runtime-only footer.
+            # Already-emitted progress cannot be retracted here. Do not add voice,
+            # media or a trailing runtime footer to an intentionally silent final.
             return ""
 
+        from gateway.bot_failure_feedback import deliver_bot_failure, is_terminal_failure
+        terminal_source = agent_result.get("queued_terminal_source", source)
+        if not automatic_notices_allowed(terminal_source) and is_terminal_failure(agent_result):
+            await deliver_bot_failure(self, event, terminal_source, agent_result, response, session_key, run_generation)
+            return None
         adapter = self._delivery_adapter_for(source)
         # Auto voice reply (TTS audio before the text) unless streaming TTS already delivered audio.
         _streaming_tts_done = adapter is not None and bool(
@@ -706,12 +730,19 @@ class GatewayTurnPersistenceMixin:
         await self._hmwa_stop_typing_for_turn(event, source)
         logger.exception("Agent error in session %s", session_key)
         status_code = getattr(e, "status_code", None)
+        failure_event = getattr(e, "_gateway_failure_event", event)
+        failure_source = failure_event.source
         if status_code in {400, 500} and len(prepared.history) > 50:
             # Context overflow / payload too large: a deterministic rejection (#107567), and the same
             # no-grow rule as the persist path (#1630) — nothing is written into an oversized session.
             from gateway.run import _context_overflow_reply
             from gateway.session_results import record_unexecuted_failure
-            return record_unexecuted_failure(_context_overflow_reply())
+            reply = record_unexecuted_failure(_context_overflow_reply())
+            if not automatic_notices_allowed(failure_source):
+                from gateway.bot_failure_feedback import deliver_bot_failure
+                await deliver_bot_failure(self, failure_event, failure_source, {"failed": True}, reply, session_key, None)
+                return None
+            return reply
         # Replay can coalesce inputs; only this input's durable marker establishes ownership.
         try:
             if prepared.message_text is not None and session_entry is not None:
@@ -752,9 +783,11 @@ class GatewayTurnPersistenceMixin:
         elif status_code == 400:
             status_hint = t("gateway.errors.hint_rejected")
         from gateway.session_results import record_unexecuted_failure
-        if not automatic_notices_allowed(source):
-            # The failure is recorded for the operator; the bot peer gets no apology to answer (#137027).
-            record_unexecuted_failure(t("gateway.errors.generic_failed"))
+        if not automatic_notices_allowed(failure_source):
+            from gateway.bot_failure_feedback import deliver_bot_failure
+            reply = record_unexecuted_failure(self._hmwa_add_failed_turn_notice(
+                t("gateway.errors.generic_failed_with_hint", hint=status_hint), PARTIAL_FAILED_TURN_NOTICE))
+            await deliver_bot_failure(self, failure_event, failure_source, {"failed": True}, reply, session_key, None)
             return None
         if getattr(e, "reason", None) == "launch_credentials_unavailable":
             # The session's own route key is gone or changed: /retry repeats it, /new is the way out.

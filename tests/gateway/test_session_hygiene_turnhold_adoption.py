@@ -36,6 +36,22 @@ from gateway.platforms.event import MessageEvent
 from gateway.session import SessionEntry, SessionSource
 
 
+@pytest.fixture(autouse=True)
+def isolate_post_turn_goals_db(monkeypatch):
+    # The fake runner owns no real goals DB. Keep post-turn hooks/managers running,
+    # but exclude their unrelated cold SessionDB bootstrap from the hygiene budget.
+    goals = importlib.import_module("hermes_cli.goals")
+    get_db = MagicMock(return_value=None)
+    acquire_db = MagicMock(side_effect=AssertionError("hygiene fixture opened a real goals DB"))
+    monkeypatch.setattr(goals, "_get_session_db", get_db)
+    monkeypatch.setattr(goals, "_acquire_session_db", acquire_db)
+    yield
+    # Verify the intended boundary was exercised, and detect a future bypass even
+    # if the production bootstrap catches the assertion as a best-effort failure.
+    get_db.assert_called()
+    acquire_db.assert_not_called()
+
+
 def _make_history(n_messages: int, content_size: int = 100) -> list:
     history = []
     content = "x" * content_size
@@ -271,11 +287,11 @@ async def test_turn_hold_keeps_admission_and_adopts_watermark_fenced_summary(
     # advances it (the deferral is not a failure).
     assert not fake_db.increment_hygiene_failure_streak.called
     assert fake_db.reset_hygiene_failure_streak.called
-    # Deferral notice still reaches the user.
+    # Personal policy: normal deferral remains log-only, without changing worker adoption.
     sent = [m["content"] for m in adapter.sent]
-    assert any(
+    assert not any(
         "deferred" in c.lower() or "still streaming" in c.lower() for c in sent
-    ), f"turn-hold must send deferral notice, got: {sent}"
+    ), f"routine turn-hold must not send a deferral notice, got: {sent}"
 
 
 @pytest.mark.asyncio

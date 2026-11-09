@@ -29,7 +29,8 @@ async def test_terminal_author_owns_marker_failure_and_success_receipt(opener_bo
     assert silent is (not health)
     store = runner.async_session_store
     if health:
-        assert bool(response) is (not terminal_bot)
+        assert response
+        assert bool(result.get("_terminal_failure")) is terminal_bot
         assert not is_intentional_silence_response(response)
         store.set_session_metadata.assert_not_awaited()
     else:
@@ -48,7 +49,8 @@ async def test_terminal_author_owns_downstream_runtime_copy(opener_bot, terminal
     opener, result = _queued_result(opener_bot, terminal_bot, text, health)
     response, silent, _ = await _shape(runner, opener, result)
     assert silent is False
-    assert bool(response) is (not terminal_bot)
+    assert response
+    assert bool(result.get("_terminal_failure")) is terminal_bot
 
 
 @pytest.mark.asyncio
@@ -60,4 +62,9 @@ async def test_terminal_ownership_does_not_swallow_model_prose(opener_bot, termi
     text = "The first calculation is complete; more work remains."
     opener, result = _queued_result(opener_bot, terminal_bot, text, health)
     response, silent, _ = await _shape(runner, opener, result)
-    assert response == text and silent is False
+    assert silent is False
+    if terminal_bot and health.get("partial"):
+        from agent.turn_failure_copy import PARTIAL_FAILED_TURN_NOTICE
+        assert text in response and PARTIAL_FAILED_TURN_NOTICE in response
+    else:
+        assert response == text

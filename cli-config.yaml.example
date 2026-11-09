@@ -1520,7 +1520,8 @@ platform_toolsets:
 #     channel_overrides:
 #       "!exampleTeamRoom:example.org":
 #         # Healthy explicit NO_REPLY/[SILENT] finals stay silent by default, even when addressed.
-#         # False requires a reply; omitted/null/true permits silence. Failures remain visible.
+#         # False requires a human reply; omitted/null/true permits healthy silence.
+#         # Healthy Bot peers remain exempt; real failures never count as successful silence.
 #         # Restart the gateway after changing room overrides.
 #         allow_silence: false
 #   slack:

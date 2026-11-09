@@ -109,10 +109,14 @@ class GatewayConfigLoadersMixin:
         return _get_channel_override(config, platform, chat_id, thread_id=thread_id, parent_id=parent_id)
 
     def _silence_allowed_for_source(self, source, display_kind, reply_expected, agent_result) -> bool:
-        """Evaluate existing exemptions before consulting the optional room permission."""
+        """Keep upstream exemptions; unspecified rooms allow healthy intentional silence.
+
+        Explicit room false still requires an answer from addressed human turns.
+        The no-result predicate stays unchanged so recovery still requires its receipt.
+        """
         from gateway.response_filters import silence_allowed
         return silence_allowed(display_kind, reply_expected) or silence_allowed(
-            display_kind, reply_expected, allow_silence=self._room_allow_silence(source),
+            display_kind, reply_expected, allow_silence=self._room_allow_silence(source) is not False,
             agent_result=agent_result)
 
     def _room_allow_silence(self, source: SessionSource) -> Optional[bool]:

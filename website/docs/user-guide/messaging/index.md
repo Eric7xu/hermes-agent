@@ -154,7 +154,7 @@ user: next message
 
 Failed turns still surface as errors; Hermes does not hide failures just because the text resembles a silence token.
 
-On a message from a person, a bare silence token is replaced by a short notice, because a message that needed a reply must not vanish. Internal wakes such as background-process notifications may stay silent, and so may a message the platform adapter reports as not addressed to the bot. Slack reports this for messages that open by @mentioning someone else and for unmentioned top-level messages that start a new thread in a free-response channel. Telegram reports it for [group messages not addressed to the bot](telegram.md#letting-the-bot-stay-silent-in-a-group). Other platforms always get the notice.
+This personal maintenance branch allows healthy, completed marker-only turns to stay silent by default, including addressed human messages. An explicit room `allow_silence: false` retains the human reply safeguard. Internal wakes, unaddressed messages, and known Bot peers retain the upstream exemptions. See [Per-Room Intentional Silence](#per-room-intentional-silence) for health and crash-recovery rules.
 
 ## Quick Setup
 
@@ -342,7 +342,7 @@ platforms:
 
 Details:
 
-- `model`, `provider`, and `system_prompt` are optional. Unset fields fall back to the global defaults. A room can also opt into intentional silence with `allow_silence` (below).
+- `model`, `provider`, and `system_prompt` are optional. Unset fields fall back to the global defaults. A room can override the default healthy-silence policy with `allow_silence` (below).
 - Lookup order is exact channel/thread id first, then the **parent** channel/forum id — so Discord threads inherit their parent channel's override automatically.
 - Resolution priority for the model is: session `/model` override → `channel_overrides` → global config. A user running `/model` in a chat still wins over the channel default.
 - The `system_prompt` override replaces the global gateway prompt for that channel (it is ephemeral — injected per turn, not stored in history).
@@ -352,8 +352,8 @@ Details:
 In multi-agent rooms, a model may choose to end its turn with an explicit silence marker such as
 `NO_REPLY` or `[SILENT]`. Healthy completed marker-only turns stay silent by default, including
 when Hermes was mentioned or directly addressed in an unconfigured or newly created room.
-To require a visible fallback instead, set `allow_silence: false` for that room in the serving
-profile's `config.yaml`:
+To require a visible fallback for human requests instead, set `allow_silence: false` for that room
+in the serving profile's `config.yaml`:
 
 ```yaml
 platforms:
@@ -365,9 +365,9 @@ platforms:
 
 Omitted, `null`, or `true` permits healthy completed silence. Explicit `false` keeps the visible
 warning when a human message needs a reply (or the adapter cannot tell). Internal notifications,
-scheduled heartbeats, and messages known to be unaddressed keep their existing silence exemptions,
-even with `allow_silence: false`. A failed policy lookup keeps the reply safeguard rather than
-assuming the override is absent. This is a room override, not a profile-wide setting.
+scheduled heartbeats, messages known to be unaddressed, and healthy Bot peers keep their existing
+silence exemptions even with `allow_silence: false`. A failed policy lookup keeps the reply safeguard
+rather than assuming the override is absent. This is a room override, not a profile-wide setting.
 It uses the same chat ID → thread ID → parent ID lookup as other channel overrides; the first
 matching entry wins, including an explicit `false`. An entry that sets only other keys (say a
 thread with just `model:`) also matches first and uses the default silence policy; repeat

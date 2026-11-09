@@ -414,8 +414,8 @@ class GatewayTurnHygieneMixin:
             "proceeding without compression this turn%s",
             session_entry.session_id, time.monotonic() - attempt.wait_started, _log_suffix,
         )
-        # Routine deferral stays log-only: the eventual reply may intentionally be silent.
-        # Actual timeout and compression failures retain their separate warning paths.
+        # Routine deferral stays log-only, even with progress enabled: the eventual
+        # reply may intentionally be silent. Actionable failures notify separately.
         raise
 
     async def _hmwa_hygiene_on_timeout(self, attempt, hs, session_entry, session_key, source):

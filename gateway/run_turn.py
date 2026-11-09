@@ -22,6 +22,7 @@ from agent.turn_failure_copy import FAILED_TURN_DISPLAY_KIND, FAILED_TURN_NOTICE
 from contextlib import nullcontext, suppress
 from contextvars import copy_context
 from gateway.bot_peer_notices import automatic_notices_allowed
+from gateway.bot_failure_feedback import failure_delivery_scope
 from gateway.config import Platform
 from gateway.platforms.base import BasePlatformAdapter, ProcessingOutcome
 from gateway.platforms.event import MessageEvent
@@ -75,7 +76,6 @@ def _tool_call_logger() -> logging.Logger:
             tool_logger.propagate = False
             tool_logger.addHandler(handler)
     return tool_logger
-
 
 
 _CONTEXT_OVERFLOW_ERROR_PHRASES = (
@@ -197,6 +197,7 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
             elif _typing_adapter and callable(getattr(_kind, "stop_typing", None)):
                 await _typing_adapter.stop_typing(source.chat_id)
 
+    @failure_delivery_scope
     async def _handle_message_with_agent(self, event, source, _quick_key: str, run_generation: int):
         """Inner handler that runs under the _running_agents sentinel guard."""
         _msg_start_time = time.time()
@@ -303,7 +304,8 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
             agent_failed_early, hidden_reasoning_incomplete, is_context_overflow_failure = (
                 self._hmwa_classify_turn_failure(agent_result, history, session_entry)
             )
-            if agent_failed_early and not is_context_overflow_failure and automatic_notices_allowed(source):
+            terminal_source = agent_result.get("queued_terminal_source", source)
+            if agent_failed_early and not is_context_overflow_failure and automatic_notices_allowed(terminal_source):
                 response = self._hmwa_add_failed_turn_notice(response, self._hmwa_failed_turn_notice(agent_result))
             response, session_entry = await self._hmwa_compression_exhaustion_reset(
                 agent_result, response, session_entry, session_key, source,
@@ -324,6 +326,8 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
             )
 
         except Exception as e:
+            if not self._is_session_run_current(_quick_key, run_generation):
+                return None
             return await self._hmwa_agent_error_reply(e, event, source, session_entry, session_key, prepared)
         finally:
             # Restore session context variables to their pre-handler state
@@ -1398,23 +1402,6 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
                 return agent.get_activity_summary()
         return {}
 
-    async def _run_agent_inactivity_warning(self, worker, source, _status_thread_metadata) -> None:
-        """Staged one-shot warning before the inactivity timeout escalates."""
-        from gateway.run import _interim_metadata
-        _warn_adapter = self._delivery_adapter_for(source) if automatic_notices_allowed(source) else None
-        if not _warn_adapter:
-            return
-        try:
-            await _warn_adapter.emit_warning(
-                source.chat_id, t(
-                    "gateway.progress.stuck_warning",
-                    minutes=int(worker.agent_warning // 60) or 1,
-                    remaining=int((worker.agent_timeout - worker.agent_warning) // 60) or 1),
-                metadata=_interim_metadata(_status_thread_metadata), logical_platform=source.platform,
-            )
-        except Exception as _warn_err:
-            logger.debug("Inactivity warning send error: %s", _warn_err)
-
     def _run_agent_timeout_result(self, worker, turn_ctx: TurnContext) -> dict:
         """Synthetic failed run dict for an inactivity timeout, with the activity-tracker diagnostic;
         interrupts the agent if it is still running so the thread pool worker is freed."""
@@ -1614,6 +1601,14 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
         # Delivery uses the finalized task result (empty/failure normalization), not raw ``result``.
         _delivery_result = response if isinstance(response, dict) else (result or {})
         first_response = _delivery_result.get("final_response", "")
+        from gateway.bot_failure_feedback import deliver_bot_failure, is_terminal_failure
+        if not automatic_notices_allowed(turn_ctx.source) and is_terminal_failure(_delivery_result):
+            await deliver_bot_failure(
+                self, MessageEvent(text="", source=turn_ctx.source, message_id=turn_ctx.inbound_message_id or ""),
+                turn_ctx.source, _delivery_result, first_response, session_key, turn_ctx.run_generation)
+            if isinstance(result, dict):
+                result["_bot_failure_delivery"] = _delivery_result.get("_bot_failure_delivery")
+            return
         _already_streamed = self._run_agent_stream_confirmed_final_delivery(
             _sc, first_response, previewed=bool(_delivery_result.get("response_previewed")),
         )
@@ -1802,7 +1797,9 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
             await _run_followup_processing_hook(
                 _hook_adapter, pending_event, "on_processing_complete", _followup_cancel_outcome(_hook_adapter))
             raise
-        except BaseException:
+        except BaseException as exc:
+            if isinstance(exc, Exception) and pending_event is not None and not hasattr(exc, "_gateway_failure_event"):
+                exc._gateway_failure_event = pending_event
             await _run_followup_processing_hook(
                 _hook_adapter, pending_event, "on_processing_complete", ProcessingOutcome.FAILURE)
             raise

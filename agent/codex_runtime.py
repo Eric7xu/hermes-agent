@@ -771,6 +771,7 @@ def run_codex_app_server_turn(agent, *, user_message: str, original_user_message
             _consume_user_interrupt(agent), messages, api_calls=0, completed=False, error=str(exc),
             final_response=f"Codex app-server turn failed: {exc}. Fall back to default runtime with `/codex-runtime auto`.",
         )
+    interrupt_reason = getattr(agent, "_tool_interrupt_reason", None)
     interrupt = _consume_user_interrupt(agent, turn.interrupted)
     # Wedged client (turn deadline blown, OAuth refresh died, subprocess exited): retire it. Post-tool
     # silence alone no longer retires — it only logs a warning (#112928).
@@ -788,6 +789,7 @@ def run_codex_app_server_turn(agent, *, user_message: str, original_user_message
     )
     return _turn_result(
         interrupt, messages, api_calls=1, completed=not turn.interrupted and turn.error is None, error=turn.error,
+        interrupt_reason=interrupt_reason if interrupt[0] else None,
         # We flushed the projected rows ourselves (agent_persisted); the gateway must skip its own DB write.
         agent_persisted=True, codex_thread_id=turn.thread_id, codex_turn_id=turn.turn_id, **reply, **usage_result,
     )

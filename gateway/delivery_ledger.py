@@ -13,6 +13,7 @@ best-effort: ledger failures must never block a send; callers wrap every call in
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -206,6 +207,7 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
     )
     if "adapter_profile" not in {row[1] for row in conn.execute("PRAGMA table_info(delivery_obligations)")}:
         add_column_if_missing(conn, "delivery_obligations", "adapter_profile", "adapter_profile TEXT")
+    add_column_if_missing(conn, "delivery_obligations", "failure_delivery", "failure_delivery TEXT")
 
 
 def _transaction():
@@ -268,7 +270,8 @@ def compute_obligation_id(session_key: str, message_ref: str, content: str) -> s
 
 
 def record_obligation(*, obligation_id: str, session_key: str, platform: str, chat_id: str,
-                      thread_id: Optional[str], content: str, adapter_profile: Optional[str] = None) -> None:
+                      thread_id: Optional[str], content: str, adapter_profile: Optional[str] = None,
+                      failure_delivery: Optional[dict] = None) -> None:
     """Record a final response as owed to the platform (state='pending')."""
     now, (pid, started) = time.time(), _owner_stamp()
     with _DB_LOCK, _transaction() as conn:
@@ -280,6 +283,9 @@ def record_obligation(*, obligation_id: str, session_key: str, platform: str, ch
                VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)""",
             (obligation_id, session_key, platform, str(chat_id), str(thread_id) if thread_id else None,
              content, now, now, pid, started, str(adapter_profile).strip() if adapter_profile else "default"))
+        if failure_delivery is not None:
+            conn.execute("UPDATE delivery_obligations SET failure_delivery=? WHERE obligation_id=?",
+                         (json.dumps(failure_delivery), obligation_id))
         # Same transaction, same connection: the cron ledgers prune this way too
         # (cron/delivery_queue._prune_terminal_unlocked, cron/executions._prune_unlocked).
         _prune_unlocked(conn, now)
@@ -363,6 +369,16 @@ def _claimed_row(oid, session_key, platform, chat_id, thread_id, content, attemp
             **({"marker": marker} if needs_marker and marker else {}), "profile": profile,
             **({"runtime_recovery": True} if runtime else {}),
             **({"last_error": last_error} if last_error else {}), "attempts": attempts + 1}
+
+
+def failure_delivery_for(obligation_id):
+    """Read the original mention/reference policy, never infer recipients from stored prose."""
+    with _DB_LOCK, _transaction() as conn:
+        row = conn.execute("SELECT failure_delivery FROM delivery_obligations WHERE obligation_id=?",
+                           (obligation_id,)).fetchone()
+    if row and row[0]:
+        return json.loads(row[0])
+    return None
 
 
 def sweep_recoverable(now: Optional[float] = None, *, deliverable_platforms: Optional[set] = None,

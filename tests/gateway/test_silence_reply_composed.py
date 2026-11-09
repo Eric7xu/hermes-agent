@@ -3,7 +3,7 @@
 External provider and platform IO are doubles; the agent loop, tool execution,
 result finalizer, TurnRunner and final warning/deduplication decision are real.
 """
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -54,6 +54,8 @@ async def test_real_loop_silence_delivery(monkeypatch, tmp_path, real_loop, plat
     monkeypatch.setattr(run_agent, "AIAgent", IsolatedAgent)
     adapter = ProgressCaptureAdapter(platform=platform)
     runner = _runner(monkeypatch, tmp_path)
+    # Existing conversation: isolate final delivery from the first-chat sethome onboarding notice.
+    runner._hmwa_first_contact_notes = AsyncMock()
     runner.adapters = {platform: adapter}
     runner.session_store.get_model_override.return_value = None
     source = SessionSource(platform=platform, chat_id="dm-composed", chat_type="dm", user_id="human")
@@ -67,5 +69,6 @@ async def test_real_loop_silence_delivery(monkeypatch, tmp_path, real_loop, plat
         assert not any(WARNING in text for text in sent + [reply or ""])
         assert sent.count(ANSWER) + int(reply == ANSWER) == 1
     else:
-        assert WARNING in (reply or "")
+        assert reply == ""
+        assert not sent
     assert not script, "the real agent must consume the entire scripted provider sequence"

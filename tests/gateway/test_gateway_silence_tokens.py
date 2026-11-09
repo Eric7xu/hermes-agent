@@ -99,6 +99,7 @@ def test_failed_agent_result_never_counts_as_intentional_silence():
 @pytest.mark.parametrize("reply_expected", [None, True], ids=["adapter-unknown", "addressed"])
 async def test_human_turn_is_silent_by_default_for_a_successful_marker(monkeypatch, tmp_path, reply_expected):
     runner = _runner(monkeypatch, tmp_path)
+    runner._room_allow_silence = lambda _: None
     runner._run_agent = AsyncMock(return_value={
         "final_response": "[SILENT]",
         "messages": [
@@ -189,6 +190,7 @@ async def test_scheduled_heartbeat_silence_suppresses_delivery(monkeypatch, tmp_
 @pytest.mark.asyncio
 async def test_queued_human_turn_is_silent_by_default():
     runner = gateway_run.GatewayRunner(GatewayConfig())
+    runner._room_allow_silence = lambda _: None
     runner._deliver_queued_first_response = AsyncMock()
     turn_ctx = SimpleNamespace(
         session_key="agent:main:telegram:group:-1001:12345",
@@ -265,7 +267,7 @@ async def test_queued_terminal_turn_owns_the_silence_verdict(monkeypatch, tmp_pa
     response = await runner._handle_message_with_agent(
         _event(internal=True), _source(), "agent:main:telegram:group:-1001:12345", 1)
     assert response and not is_intentional_silence_response(response)
-    # Unaddressed opener, addressed terminal turn: visible fallback.
+    # Unaddressed opener, addressed terminal turn in that room: visible fallback.
     runner = _runner(monkeypatch, tmp_path)
     runner.config = guarded_config
     runner._run_agent = AsyncMock(return_value=_result(None, True))

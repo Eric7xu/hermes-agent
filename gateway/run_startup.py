@@ -490,7 +490,13 @@ class GatewayStartupMixin:
                 content = row.get("marker", RECOVERED_MARKER) + content
             metadata = {"thread_id": row["thread_id"]} if row.get("thread_id") else None
             try:
-                result = await adapter.send(chat_id=row["chat_id"], content=content, metadata=metadata)
+                from gateway.delivery_ledger import failure_delivery_for
+                failure_delivery = await asyncio.to_thread(failure_delivery_for, row["obligation_id"])
+                options = {}
+                if failure_delivery is not None:
+                    metadata = dict(metadata or {}, failure_owner_ids=failure_delivery.get("owner_ids", []))
+                    options["reply_to"] = failure_delivery.get("reply_to")
+                result = await adapter.send(chat_id=row["chat_id"], content=content, metadata=metadata, **options)
             except Exception as send_err:
                 logger.warning("obligation %s: redelivery send raised: %s", row["obligation_id"], send_err)
                 result = None
@@ -817,10 +823,9 @@ class GatewayStartupMixin:
         self, history: list, started: float, origin, *, silence_decision=None, active_token=None,
     ) -> Optional[str]:
         """What a crash-left turn owes, judged as live delivery would have: ``None`` when it never
-        persisted a final reply after *started*; ``""`` when nothing would have been presented (a
-        silence marker on a machinery turn or on a turn the adapter reported as not addressed to the
-        bot, a muted diagnostic wake); else the text to send, with any other bare silence marker
-        replaced by the same notice the live path sends."""
+        persisted a final reply after *started*; ``""`` for proven completed silence or a muted
+        diagnostic wake. A human marker without the exact durable receipt keeps the upstream
+        fallback: transcript bytes alone cannot prove successful completion."""
         from gateway.platforms.base import _strip_media_directives
         from gateway.response_filters import (
             is_intentional_silence_response, is_machinery_display_kind, silence_allowed,
