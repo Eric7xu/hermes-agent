@@ -110,10 +110,10 @@ def failure_text(result, source, response=""):
     response = response or t("gateway.errors.generic_failed")
     if result.get("partial"):
         from agent.turn_failure_copy import PARTIAL_FAILED_TURN_NOTICE
-        # Keep useful partial text, but reserve room for the truthful terminal status.
+        # Normalize existing status before clipping: its old position may be outside the budget.
         notice = PARTIAL_FAILED_TURN_NOTICE
-        if notice not in response:
-            return response[:1400 - len(notice) - 2] + "\n\n" + notice
+        body = response.replace(notice, "").strip()[:1400 - len(notice) - 2].rstrip()
+        return body + "\n\n" + notice if body else notice
     return response[:1400]
 
 
