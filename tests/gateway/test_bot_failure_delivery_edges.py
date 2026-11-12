@@ -30,7 +30,8 @@ def prepare(monkeypatch, tmp_path):
     ctx = SimpleNamespace(source=event.source, session_key='agent:main:discord:group:room', run_generation=1,
         stream_consumer_holder=[None], mute_notification_reply=False, inbound_message_id=event.message_id,
         session_id='s', _interrupt_depth=0, history=[], _status_thread_metadata=None,
-        context_prompt=None, result_holder=[value])
+        context_prompt=None, result_holder=[value], _cleanup_adapter=None, _cleanup_msg_ids=[],
+        _cleanup_progress=False)
     return runner, adapter, event, pending, ctx, value
 
 @pytest.mark.asyncio
